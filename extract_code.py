@@ -42,8 +42,8 @@ if uploaded:
         # Adjust these if your export UI margins differ.
         default_x0 = 0.00
         default_x1 = 1.00
-        default_y0 = 0.08
-        default_y1 = 0.40
+        default_y0 = 0.21
+        default_y1 = 0.55
 
         st.subheader("Crop settings (percent of frame)")
         c1, c2 = st.columns(2)
