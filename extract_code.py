@@ -3,13 +3,16 @@ import cv2
 import numpy as np
 import tempfile
 import os
+import zipfile
+import io
 
 st.set_page_config(page_title="Vevo 2100 Batch Cropper", layout="centered")
 st.title("Vevo 2100 Video Cropper (Batch Mode)")
 
 st.markdown("""
 Upload one or more **Vevo 2100** videos below.  
-The app crops the **top band across the full width** (adjustable) and exports cropped versions with `_cropped` added to each filename.
+The app crops the **top band across the full width** (adjustable) and exports cropped versions with `_cropped` added to each filename.  
+You can also download all processed videos together as a ZIP file.
 """)
 
 uploaded_files = st.file_uploader(
@@ -20,10 +23,11 @@ def clamp(val, lo, hi):
     return max(lo, min(hi, val))
 
 if uploaded_files:
-    # Read first video to get frame dimensions for slider defaults
+    # Preview the first uploaded video
     tmp_preview = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_files[0].name)[1])
     tmp_preview.write(uploaded_files[0].read())
     tmp_preview.flush()
+
     cap_preview = cv2.VideoCapture(tmp_preview.name)
     ok, first_frame = cap_preview.read()
     cap_preview.release()
@@ -65,8 +69,8 @@ if uploaded_files:
 
     if st.button("Process All Uploaded Videos"):
         output_files = []
+
         for uploaded in uploaded_files:
-            # Rewind file pointer
             uploaded.seek(0)
             tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
             tmp_in.write(uploaded.read())
@@ -80,10 +84,8 @@ if uploaded_files:
             fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-            # Construct output filename
             base, ext = os.path.splitext(uploaded.name)
             cropped_name = f"{base}_cropped{ext}"
-
             tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(tmp_out.name, fourcc, fps, (crop_w, crop_h))
@@ -107,6 +109,7 @@ if uploaded_files:
 
         st.success("✅ All videos processed successfully!")
 
+        # Individual downloads
         for name, path in output_files:
             with open(path, "rb") as f:
                 st.download_button(
@@ -115,3 +118,17 @@ if uploaded_files:
                     file_name=name,
                     mime="video/mp4",
                 )
+
+        # --- Create ZIP of all outputs ---
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for name, path in output_files:
+                zipf.write(path, arcname=name)
+        zip_buffer.seek(0)
+
+        st.download_button(
+            label="⬇️ Download All Cropped Videos (ZIP)",
+            data=zip_buffer,
+            file_name="cropped_videos.zip",
+            mime="application/zip"
+        )
