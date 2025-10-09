@@ -3,7 +3,6 @@ import cv2
 import tempfile
 import numpy as np
 import os
-from moviepy.editor import VideoFileClip
 
 st.title("Vevo 2100 Video Cropper")
 
