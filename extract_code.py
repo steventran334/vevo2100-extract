@@ -12,10 +12,10 @@ st.title("Vevo 2100 Video Editor (Batch)")
 st.markdown("""
 **Instructions:**
 1. **Upload** your videos.
-2. **Select Video**: Choose which video to preview.
-3. **Set FPS**: Adjusting this now updates the **Time** display and **Motion Preview**.
-4. **Trim**: Set your frame range.
-5. **Process**: Generates the final files.
+2. **Select Video** to preview.
+3. **Find Frame:** Use the scrubber and Prev/Next buttons to find the exact image.
+4. **Lock It:** Click **"Set as Start"** or **"Set as End"** to lock that frame, ignoring any number drift.
+5. **Process:** Generate your clips.
 """)
 
 # --- File Uploader ---
@@ -67,89 +67,65 @@ if uploaded_files:
         max_value=1000.0, 
         value=float(detected_fps), 
         step=1.0,
-        help="Changing this updates the 'Time' in the preview and the speed of the output video."
+        help="Sets the playback speed of the saved video."
     )
     
-    # --- 4. Frame Offset ---
-    st.sidebar.subheader("2. Frame Correction")
-    offset = st.sidebar.number_input(
-        "Frame Offset (+/-)",
-        value=0,
-        step=1,
-        help="Adjusts the displayed frame number to match your external notes."
-    )
-
-    # --- 5. Synchronized Frame Trimming ---
-    st.sidebar.subheader("3. Trim Video")
-    
-    max_display_frame = (total_frames - 1) + offset
-    min_display_frame = 0 + offset
-    
-    st.sidebar.caption(f"Internal Frames: 0 to {total_frames-1}")
-
-    # Initialize State
+    # --- Initialize State ---
     if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
         st.session_state.current_video_name = selected_name
-        st.session_state.num_start = 0 + offset
-        st.session_state.num_end = (total_frames - 1) + offset
-        st.session_state.slider_range = (0 + offset, (total_frames - 1) + offset)
-        st.session_state.preview_frame = 0 + offset
-        st.session_state.last_start = 0 + offset
-        st.session_state.last_end = (total_frames - 1) + offset
+        st.session_state.num_start = 0
+        st.session_state.num_end = total_frames - 1
+        st.session_state.preview_frame = 0
 
-    # Callbacks
-    def update_slider_from_num():
-        s = st.session_state.num_start
-        e = st.session_state.num_end
-        if s > e: s = e 
-        st.session_state.slider_range = (s, e)
-        if s != st.session_state.last_start:
-            st.session_state.preview_frame = s
-        elif e != st.session_state.last_end:
-            st.session_state.preview_frame = e
-        st.session_state.last_start = s
-        st.session_state.last_end = e
+    # Ensure valid bounds
+    if st.session_state.preview_frame >= total_frames:
+        st.session_state.preview_frame = total_frames - 1
 
-    def update_num_from_slider():
-        s, e = st.session_state.slider_range
-        st.session_state.num_start = s
-        st.session_state.num_end = e
-        if s != st.session_state.last_start:
-            st.session_state.preview_frame = s
-        elif e != st.session_state.last_end:
-            st.session_state.preview_frame = e
-        st.session_state.last_start = s
-        st.session_state.last_end = e
+    # --- 4. Interactive Preview & Navigation ---
+    st.subheader(f"Preview: {selected_name}")
 
-    # Inputs
-    col_start, col_end = st.sidebar.columns(2)
-    with col_start:
-        st.number_input("Start Frame", value=st.session_state.num_start, key="num_start", on_change=update_slider_from_num)
-    with col_end:
-        st.number_input("End Frame", value=st.session_state.num_end, key="num_end", on_change=update_slider_from_num)
+    # Slider for rough seeking
+    # We use a callback here so the slider can update the preview state
+    def update_preview_from_slider():
+        st.session_state.preview_frame = st.session_state.preview_slider
 
-    start_display, end_display = st.sidebar.slider(
-        "Frame Range",
-        min_value=min_display_frame,
-        max_value=max_display_frame,
-        value=st.session_state.slider_range,
-        key="slider_range",
+    slider_val = st.slider(
+        "Scrub Timeline", 
+        min_value=0, 
+        max_value=total_frames - 1, 
+        value=st.session_state.preview_frame,
         step=1,
-        on_change=update_num_from_slider
+        key="preview_slider",
+        on_change=update_preview_from_slider
     )
-    
-    actual_start = clamp(start_display - offset, 0, total_frames - 1)
-    actual_end = clamp(end_display - offset, 0, total_frames - 1)
 
-    # --- 6. Spatial Cropping ---
-    st.sidebar.subheader("4. Spatial Crop")
+    # Fine-Tuning Buttons (Prev / Next)
+    c_prev, c_mid, c_next = st.columns([1, 3, 1])
+    with c_prev:
+        if st.button("⏪ Prev Frame"):
+            st.session_state.preview_frame = max(0, st.session_state.preview_frame - 1)
+            st.rerun()
+    
+    with c_next:
+        if st.button("Next Frame ⏩"):
+            st.session_state.preview_frame = min(total_frames - 1, st.session_state.preview_frame + 1)
+            st.rerun()
+
+    # --- Display Image ---
+    current_frame_idx = st.session_state.preview_frame
+    cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame_idx)
+    ret, frame_preview = cap.read()
+    
+    # --- Spatial Crop Overlay ---
+    # We define crop settings here so they can be drawn on the preview
+    st.sidebar.subheader("3. Spatial Crop")
     default_x0, default_x1 = 0.00, 1.00
     default_y0, default_y1 = 0.21, 0.55
-    c1, c2 = st.sidebar.columns(2)
-    with c1:
+    c_side1, c_side2 = st.sidebar.columns(2)
+    with c_side1:
         x0 = st.slider("Left (%)", 0.0, 1.0, default_x0, 0.01)
         x1 = st.slider("Right (%)", 0.0, 1.0, default_x1, 0.01)
-    with c2:
+    with c_side2:
         y0 = st.slider("Top (%)", 0.0, 1.0, default_y0, 0.01)
         y1 = st.slider("Bottom (%)", 0.0, 1.0, default_y1, 0.01)
 
@@ -162,74 +138,52 @@ if uploaded_files:
     crop_w = x_end - x_start
     crop_h = y_end - y_start
 
-    # --- 7. Interactive Preview ---
-    st.subheader(f"Preview: {selected_name}")
-    
-    if 'preview_frame' not in st.session_state:
-        st.session_state.preview_frame = 0 + offset
-
-    preview_frame_display = st.slider(
-        "Scrub Timeline", 
-        min_value=min_display_frame, 
-        max_value=max_display_frame, 
-        value=st.session_state.preview_frame,
-        step=1,
-        key="preview_slider"
-    )
-
-    actual_preview_frame = clamp(preview_frame_display - offset, 0, total_frames - 1)
-
-    cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
-    ret, frame_preview = cap.read()
-
     if ret:
-        # Calculate Time based on User FPS
-        # This is the key update: showing how FPS affects time
-        current_time = actual_preview_frame / user_fps
-        
         overlay = frame_preview.copy()
         cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
-        
         st.image(
             cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 
             use_container_width=True, 
-            caption=f"Frame: {preview_frame_display} | Time: {current_time:.3f}s (@ {user_fps} FPS)"
+            caption=f"Currently Viewing Frame: {current_frame_idx}"
         )
-        
-        # --- Motion Preview Button ---
-        st.write("Check Playback Speed:")
-        if st.button("▶️ Play 1s Clip (Motion Check)"):
-            with st.spinner("Rendering preview clip..."):
-                t_prev = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                # Writer uses the USER FPS
-                preview_writer = cv2.VideoWriter(t_prev.name, fourcc, user_fps, (crop_w, crop_h))
-                
-                # Render 1 second (or approx 30-60 frames) starting from current
-                frames_to_render = int(user_fps) 
-                cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
-                
-                for _ in range(frames_to_render):
-                    ret_p, frame_p = cap.read()
-                    if not ret_p: break
-                    crop_p = frame_p[y_start:y_end, x_start:x_end]
-                    if crop_p.shape[0] > 0 and crop_p.shape[1] > 0:
-                        preview_writer.write(crop_p)
-                
-                preview_writer.release()
-                st.video(t_prev.name)
-                # Cleanup (Video widget needs the file for a moment, so we rely on OS cleanup or next run)
-
     else:
         st.warning("Could not read frame.")
+
+    st.markdown("---")
+
+    # --- 5. "Lock" Buttons (The Solution to Drift) ---
+    st.subheader("2. Set Cut Points from Preview")
+    st.info("Use the Prev/Next buttons above to match the image to your notes, then click 'Set' below. This ignores the number mismatch.")
+
+    col_set_start, col_set_end = st.columns(2)
     
+    with col_set_start:
+        if st.button("👇 Set Current Frame as START"):
+            st.session_state.num_start = current_frame_idx
+            # Auto-correct end if it's before start
+            if st.session_state.num_end < st.session_state.num_start:
+                st.session_state.num_end = total_frames - 1
+            st.success(f"Start set to {current_frame_idx}")
+
+    with col_set_end:
+        if st.button("👇 Set Current Frame as END"):
+            st.session_state.num_end = current_frame_idx
+            # Auto-correct start if it's after end
+            if st.session_state.num_start > st.session_state.num_end:
+                st.session_state.num_start = 0
+            st.success(f"End set to {current_frame_idx}")
+
+    # Display Current Selection
+    st.markdown(f"**Current Selection:** Frame **{st.session_state.num_start}** to **{st.session_state.num_end}**")
+    st.caption(f"(Duration: {st.session_state.num_end - st.session_state.num_start + 1} frames)")
+
     cap.release()
     try: os.unlink(tfile.name)
     except: pass
 
     st.markdown("---")
 
-    # --- 8. Batch Processing Logic ---
+    # --- 6. Batch Processing Logic ---
     if 'processed_zip' not in st.session_state:
         st.session_state['processed_zip'] = None
 
@@ -237,6 +191,10 @@ if uploaded_files:
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         zip_buffer = io.BytesIO()
+        
+        # We use the Start/End frames set in Session State
+        final_start = st.session_state.num_start
+        final_end = st.session_state.num_end
         
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
             for i, uploaded_file in enumerate(uploaded_files):
@@ -249,7 +207,7 @@ if uploaded_files:
 
                 vcap = cv2.VideoCapture(t_in.name)
                 base_name = os.path.splitext(uploaded_file.name)[0]
-                out_name = f"{base_name}_frames_{actual_start}-{actual_end}.mp4"
+                out_name = f"{base_name}_frames_{final_start}-{final_end}.mp4"
                 
                 t_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
                 t_out_name = t_out.name
@@ -262,13 +220,15 @@ if uploaded_files:
                 while True:
                     ok, frame = vcap.read()
                     if not ok: break
-                    if actual_start <= current_frame <= actual_end:
+                    
+                    if final_start <= current_frame <= final_end:
                         if frame.shape[0] >= y_end and frame.shape[1] >= x_end:
                             crop = frame[y_start:y_end, x_start:x_end]
                             if crop.shape[0] > 0 and crop.shape[1] > 0:
                                 writer.write(crop)
+                    
                     current_frame += 1
-                    if current_frame > actual_end: break
+                    if current_frame > final_end: break
                 
                 vcap.release()
                 writer.release()
