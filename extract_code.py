@@ -13,8 +13,9 @@ st.markdown("""
 **Instructions:**
 1. **Upload** your videos.
 2. **Select Video**: Choose which video to preview.
-3. **Trim**: Moving the slider updates the boxes, and typing in the boxes updates the slider.
-4. **Process**: Generates the cropped/trimmed files.
+3. **Offset**: If the app's frame count doesn't match your notes, adjust the **Frame Offset**.
+4. **Trim**: Use the slider or number boxes.
+5. **Process**: Generates the cropped/trimmed files.
 """)
 
 # --- File Uploader ---
@@ -35,7 +36,6 @@ if uploaded_files:
     selected_file = file_map[selected_name]
 
     # --- 2. Read Metadata ---
-    # Save temp file to read video info
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(selected_file.name)[1])
     selected_file.seek(0)
     tfile.write(selected_file.read())
@@ -66,76 +66,110 @@ if uploaded_files:
         min_value=1.0, 
         max_value=1000.0, 
         value=float(detected_fps), 
-        step=1.0
+        step=1.0,
+        help="This only affects the playback speed of the SAVED video. It does not change the frame numbers."
+    )
+    
+    # --- 4. Frame Offset (New Feature) ---
+    st.sidebar.subheader("2. Frame Correction")
+    offset = st.sidebar.number_input(
+        "Frame Offset (+/-)",
+        value=0,
+        step=1,
+        help="If the video player says Frame 310 but this app says 304, set this to +6. The app will subtract this number internally so your inputs match your external notes."
     )
 
-    # --- 4. Synchronized Frame Trimming ---
-    st.sidebar.subheader("2. Trim Video (by Frames)")
-    st.sidebar.caption(f"Total Frames: {total_frames}")
+    # --- 5. Synchronized Frame Trimming ---
+    st.sidebar.subheader("3. Trim Video")
+    
+    # Logic: The USER sees "Display Frames" (which equal Actual Frame + Offset)
+    # The CODE uses "Actual Frames" (0 to total_frames-1)
+    
+    max_display_frame = (total_frames - 1) + offset
+    min_display_frame = 0 + offset
+    
+    st.sidebar.caption(f"Internal Frames: 0 to {total_frames-1}")
 
-    # Initialize Session State for this specific video file
-    # If we switch videos, we need to reset the state to avoid "index out of bounds" errors
+    # Initialize State
     if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
         st.session_state.current_video_name = selected_name
-        st.session_state.num_start = 0
-        st.session_state.num_end = total_frames - 1
-        st.session_state.slider_range = (0, total_frames - 1)
+        st.session_state.num_start = 0 + offset
+        st.session_state.num_end = (total_frames - 1) + offset
+        st.session_state.slider_range = (0 + offset, (total_frames - 1) + offset)
+        st.session_state.preview_frame = 0 + offset
+        st.session_state.last_start = 0 + offset
+        st.session_state.last_end = (total_frames - 1) + offset
 
-    # --- Callbacks for Syncing ---
+    # Callbacks (working with DISPLAY values)
     def update_slider_from_num():
-        # Get values from number boxes
         s = st.session_state.num_start
         e = st.session_state.num_end
         
-        # Enforce valid range for slider
-        if s > e: s = e # Prevent start > end
-        if s < 0: s = 0
-        if e >= total_frames: e = total_frames - 1
+        if s > e: s = e 
         
-        # Update the slider key
         st.session_state.slider_range = (s, e)
+        
+        if s != st.session_state.last_start:
+            st.session_state.preview_frame = s
+        elif e != st.session_state.last_end:
+            st.session_state.preview_frame = e
+            
+        st.session_state.last_start = s
+        st.session_state.last_end = e
 
     def update_num_from_slider():
-        # Get values from slider
         s, e = st.session_state.slider_range
-        
-        # Update the number box keys
         st.session_state.num_start = s
         st.session_state.num_end = e
+        
+        if s != st.session_state.last_start:
+            st.session_state.preview_frame = s
+        elif e != st.session_state.last_end:
+            st.session_state.preview_frame = e
+            
+        st.session_state.last_start = s
+        st.session_state.last_end = e
 
     # A. Number Inputs
     col_start, col_end = st.sidebar.columns(2)
     with col_start:
         st.number_input(
             "Start Frame", 
-            min_value=0, 
-            max_value=total_frames-1, 
+            value=st.session_state.num_start,
             key="num_start", 
             on_change=update_slider_from_num
         )
     with col_end:
         st.number_input(
             "End Frame", 
-            min_value=0, 
-            max_value=total_frames-1, 
+            value=st.session_state.num_end,
             key="num_end", 
             on_change=update_slider_from_num
         )
 
     # B. Slider Input
-    start_f, end_f = st.sidebar.slider(
-        "Frame Range Slider",
-        min_value=0,
-        max_value=total_frames - 1,
+    start_display, end_display = st.sidebar.slider(
+        "Frame Range",
+        min_value=min_display_frame,
+        max_value=max_display_frame,
+        value=st.session_state.slider_range,
         key="slider_range",
         step=1,
         on_change=update_num_from_slider
     )
     
-    st.sidebar.info(f"Duration: {end_f - start_f + 1} frames")
+    # Calculate Actual Frames for processing
+    actual_start = start_display - offset
+    actual_end = end_display - offset
+    
+    # Clamp just in case user offset goes out of bounds
+    actual_start = clamp(actual_start, 0, total_frames - 1)
+    actual_end = clamp(actual_end, 0, total_frames - 1)
 
-    # --- 5. Spatial Cropping ---
-    st.sidebar.subheader("3. Spatial Crop")
+    st.sidebar.info(f"Duration: {actual_end - actual_start + 1} frames")
+
+    # --- 6. Spatial Cropping ---
+    st.sidebar.subheader("4. Spatial Crop")
     
     default_x0, default_x1 = 0.12, 0.97
     default_y0, default_y1 = 0.31, 0.48
@@ -158,24 +192,35 @@ if uploaded_files:
     crop_w = x_end - x_start
     crop_h = y_end - y_start
 
-    # --- 6. Interactive Preview ---
+    # --- 7. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
     
-    preview_frame_idx = st.slider(
-        "Scrub Timeline to Verify Crop", 
-        min_value=0, 
-        max_value=total_frames - 1, 
-        value=min(start_f, total_frames - 1),
-        step=1
+    # Preview logic also needs to handle offset
+    if 'preview_frame' not in st.session_state:
+        st.session_state.preview_frame = 0 + offset
+
+    preview_frame_display = st.slider(
+        "Scrub Timeline (Visual Check)", 
+        min_value=min_display_frame, 
+        max_value=max_display_frame, 
+        value=st.session_state.preview_frame,
+        step=1,
+        key="preview_slider"
     )
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, preview_frame_idx)
+    # Convert display frame back to actual frame for OpenCV
+    actual_preview_frame = preview_frame_display - offset
+    actual_preview_frame = clamp(actual_preview_frame, 0, total_frames - 1)
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
     ret, frame_preview = cap.read()
 
     if ret:
         overlay = frame_preview.copy()
         cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
-        st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True, caption=f"Frame: {preview_frame_idx}")
+        st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True, caption=f"Display Frame: {preview_frame_display} (Actual: {actual_preview_frame})")
+    else:
+        st.warning("Could not read frame.")
     
     cap.release()
     try: os.unlink(tfile.name)
@@ -183,7 +228,7 @@ if uploaded_files:
 
     st.markdown("---")
 
-    # --- 7. Batch Processing Logic ---
+    # --- 8. Batch Processing Logic ---
     
     if 'processed_zip' not in st.session_state:
         st.session_state['processed_zip'] = None
@@ -208,7 +253,7 @@ if uploaded_files:
                 vcap = cv2.VideoCapture(t_in.name)
                 
                 base_name = os.path.splitext(uploaded_file.name)[0]
-                out_name = f"{base_name}_frames_{start_f}-{end_f}.mp4"
+                out_name = f"{base_name}_frames_{actual_start}-{actual_end}.mp4"
                 
                 t_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
                 t_out_name = t_out.name
@@ -222,14 +267,14 @@ if uploaded_files:
                     ok, frame = vcap.read()
                     if not ok: break
                     
-                    if start_f <= current_frame <= end_f:
+                    if actual_start <= current_frame <= actual_end:
                         if frame.shape[0] >= y_end and frame.shape[1] >= x_end:
                             crop = frame[y_start:y_end, x_start:x_end]
                             if crop.shape[0] > 0 and crop.shape[1] > 0:
                                 writer.write(crop)
                     
                     current_frame += 1
-                    if current_frame > end_f: break
+                    if current_frame > actual_end: break
                 
                 vcap.release()
                 writer.release()
