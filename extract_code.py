@@ -12,10 +12,10 @@ st.title("Vevo 2100 Video Editor (Batch)")
 st.markdown("""
 **Instructions:**
 1. **Upload** your videos.
-2. **Set FPS**: Input the frame rate used during capture.
-3. **Trim & Crop**: Adjust the slider and green box.
-4. **Process**: Click process to generate the files.
-5. **Download**: A persistent download button will appear once done.
+2. **Select Video**: Choose which video to use for previewing settings.
+3. **Set FPS**: Input the capture frame rate.
+4. **Trim & Crop**: Use the slider OR the number boxes to select frames.
+5. **Process**: Click process to generate the files.
 """)
 
 # --- File Uploader ---
@@ -28,16 +28,42 @@ uploaded_files = st.file_uploader(
 def clamp(val, lo, hi):
     return max(lo, min(hi, val))
 
+# --- Session State Management for Syncing Slider & Inputs ---
+if 'trim_start' not in st.session_state:
+    st.session_state.trim_start = 0
+if 'trim_end' not in st.session_state:
+    st.session_state.trim_end = 0
+
+def update_from_slider():
+    st.session_state.trim_start = st.session_state.trim_slider[0]
+    st.session_state.trim_end = st.session_state.trim_slider[1]
+
+def update_from_inputs():
+    st.session_state.trim_start = st.session_state.num_start
+    st.session_state.trim_end = st.session_state.num_end
+
 if uploaded_files:
-    # --- 1. Initialize Preview (First Video) ---
-    # Save the first uploaded file to temp to read metadata
-    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_files[0].name)[1])
-    tfile.write(uploaded_files[0].read())
+    
+    # --- 1. Video Selector ---
+    # Create a mapping of names to files
+    file_map = {f.name: f for f in uploaded_files}
+    selected_name = st.selectbox("Select Video to Preview/Setup", list(file_map.keys()))
+    selected_file = file_map[selected_name]
+
+    # --- 2. Initialize Preview (Selected Video) ---
+    # Save the SELECTED file to temp to read metadata
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(selected_file.name)[1])
+    selected_file.seek(0)
+    tfile.write(selected_file.read())
     tfile.flush()
     
     cap = cv2.VideoCapture(tfile.name)
+    
     if not cap.isOpened():
         st.error("Error opening video file.")
+        total_frames = 1
+        W, H = 640, 480
+        detected_fps = 30.0
     else:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         detected_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -47,41 +73,72 @@ if uploaded_files:
         # Fallback for missing metadata
         if total_frames <= 0: total_frames = 100
         if detected_fps <= 0: detected_fps = 30.0
-        if W == 0 or H == 0: 
-            ret, first_frame = cap.read()
-            if ret:
-                H, W = first_frame.shape[:2]
+
+    # Ensure session state bounds are valid for the NEW video selected
+    # (e.g., if switching from a long video to a short one)
+    if st.session_state.trim_end >= total_frames:
+        st.session_state.trim_end = total_frames - 1
+    if st.session_state.trim_start >= total_frames:
+        st.session_state.trim_start = 0
 
     st.sidebar.header("Processing Settings")
 
-    # --- 2. FPS Input ---
+    # --- 3. FPS Input ---
     st.sidebar.subheader("1. Playback Speed")
     user_fps = st.sidebar.number_input(
         "Capture FPS", 
         min_value=1.0, 
         max_value=1000.0, 
         value=float(detected_fps), 
-        step=1.0,
-        help="Enter the frame rate used to capture the video."
+        step=1.0
     )
 
-    # --- 3. Frame Trimming ---
+    # --- 4. Frame Trimming (Dual Input) ---
     st.sidebar.subheader("2. Trim Video (by Frames)")
+    st.sidebar.caption(f"Total Frames: {total_frames}")
+
+    # A. Number Inputs (Synced)
+    col_start, col_end = st.sidebar.columns(2)
+    with col_start:
+        st.number_input(
+            "Start Frame", 
+            min_value=0, 
+            max_value=total_frames-1, 
+            key="num_start",
+            on_change=update_from_inputs,
+            value=st.session_state.trim_start
+        )
+    with col_end:
+        st.number_input(
+            "End Frame", 
+            min_value=0, 
+            max_value=total_frames-1, 
+            key="num_end", 
+            on_change=update_from_inputs,
+            value=st.session_state.trim_end if st.session_state.trim_end > 0 else total_frames - 1
+        )
+
+    # B. Slider Input (Synced)
+    # Ensure the slider value in session state matches valid bounds
+    slider_start = clamp(st.session_state.trim_start, 0, total_frames - 1)
+    slider_end = clamp(st.session_state.trim_end, 0, total_frames - 1)
+    if slider_end < slider_start: slider_end = slider_start # Prevent crossover error
     
     start_f, end_f = st.sidebar.slider(
-        "Select Frame Range",
+        "Frame Range Slider",
         min_value=0,
         max_value=total_frames - 1,
-        value=(0, total_frames - 1),
-        step=1
+        value=(slider_start, slider_end),
+        step=1,
+        key="trim_slider",
+        on_change=update_from_slider
     )
     
-    st.sidebar.info(f"Keeping frames **{start_f}** to **{end_f}**\n(Duration: {end_f - start_f + 1} frames)")
+    st.sidebar.info(f"Duration: {end_f - start_f + 1} frames")
 
-    # --- 4. Spatial Cropping ---
+    # --- 5. Spatial Cropping ---
     st.sidebar.subheader("3. Spatial Crop")
     
-    # Default Vevo 2100 crop values
     default_x0, default_x1 = 0.00, 1.00
     default_y0, default_y1 = 0.21, 0.55
 
@@ -93,7 +150,6 @@ if uploaded_files:
         y0 = st.slider("Top (%)", 0.0, 1.0, default_y0, 0.01)
         y1 = st.slider("Bottom (%)", 0.0, 1.0, default_y1, 0.01)
 
-    # Calculate pixel coordinates
     x_start = int(clamp(x0, 0, 1) * W)
     x_end   = int(clamp(x1, 0, 1) * W)
     y_start = int(clamp(y0, 0, 1) * H)
@@ -104,14 +160,17 @@ if uploaded_files:
     crop_w = x_end - x_start
     crop_h = y_end - y_start
 
-    # --- 5. Interactive Preview ---
-    st.subheader(f"Preview: {uploaded_files[0].name}")
+    # --- 6. Interactive Preview ---
+    st.subheader(f"Preview: {selected_name}")
+    
+    # Ensure preview slider stays within bounds of the currently selected video
+    preview_max = total_frames - 1 if total_frames > 0 else 0
     
     preview_frame_idx = st.slider(
         "Scrub Timeline to Verify Crop", 
         min_value=0, 
-        max_value=total_frames - 1, 
-        value=start_f,
+        max_value=preview_max, 
+        value=min(start_f, preview_max),
         step=1
     )
 
@@ -120,11 +179,13 @@ if uploaded_files:
 
     if ret:
         overlay = frame_preview.copy()
+        # Draw crop box
         cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
-        st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_column_width=True, caption=f"Frame: {preview_frame_idx}")
+        st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True, caption=f"Frame: {preview_frame_idx}")
+    else:
+        st.warning("Could not read frame. The video might be shorter than the selected frame index.")
     
     cap.release()
-    # Clean up temp preview file
     try:
         os.unlink(tfile.name)
     except:
@@ -132,18 +193,15 @@ if uploaded_files:
 
     st.markdown("---")
 
-    # --- 6. Batch Processing Logic ---
+    # --- 7. Batch Processing Logic ---
     
-    # Initialize session state for the zip file if it doesn't exist
     if 'processed_zip' not in st.session_state:
         st.session_state['processed_zip'] = None
 
-    if st.button(f"Process {len(uploaded_files)} Video(s)"):
+    if st.button(f"Process All {len(uploaded_files)} Video(s)"):
         
         progress_bar = st.progress(0.0)
         status_text = st.empty()
-        
-        # Buffer for ZIP file
         zip_buffer = io.BytesIO()
         
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
@@ -151,17 +209,14 @@ if uploaded_files:
             for i, uploaded_file in enumerate(uploaded_files):
                 status_text.text(f"Processing {uploaded_file.name}...")
                 
-                # 1. Write input to temp
                 uploaded_file.seek(0)
                 t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1])
                 t_in.write(uploaded_file.read())
                 t_in.flush()
                 t_in.close()
 
-                # 2. Setup Video Capture
                 vcap = cv2.VideoCapture(t_in.name)
                 
-                # 3. Setup Video Writer
                 base_name = os.path.splitext(uploaded_file.name)[0]
                 out_name = f"{base_name}_frames_{start_f}-{end_f}.mp4"
                 
@@ -172,7 +227,6 @@ if uploaded_files:
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                 writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (crop_w, crop_h))
                 
-                # 4. Loop Frames
                 current_frame = 0
                 while True:
                     ok, frame = vcap.read()
@@ -180,41 +234,34 @@ if uploaded_files:
                         break
                     
                     if start_f <= current_frame <= end_f:
-                        crop = frame[y_start:y_end, x_start:x_end]
-                        if crop.shape[0] > 0 and crop.shape[1] > 0:
-                            writer.write(crop)
+                        # Safety check: ensure frame is large enough to crop
+                        if frame.shape[0] >= y_end and frame.shape[1] >= x_end:
+                            crop = frame[y_start:y_end, x_start:x_end]
+                            if crop.shape[0] > 0 and crop.shape[1] > 0:
+                                writer.write(crop)
                     
                     current_frame += 1
                     if current_frame > end_f:
                         break
                 
-                # 5. Cleanup current file
                 vcap.release()
                 writer.release()
                 
-                try:
-                    os.unlink(t_in.name)
-                except:
-                    pass
+                try: os.unlink(t_in.name)
+                except: pass
                 
-                # 6. Add to Zip
                 zipf.write(t_out_name, arcname=out_name)
                 
-                try:
-                    os.unlink(t_out_name)
-                except:
-                    pass
+                try: os.unlink(t_out_name)
+                except: pass
                 
-                # Update Progress
                 progress_bar.progress((i + 1) / len(uploaded_files))
 
         status_text.success("✅ Processing Complete!")
         
-        # Save zip to session state
         zip_buffer.seek(0)
         st.session_state['processed_zip'] = zip_buffer.getvalue()
 
-    # --- 7. Persistent Download Button ---
     if st.session_state['processed_zip'] is not None:
         st.download_button(
             label="⬇️ Download All Processed Videos (ZIP)",
