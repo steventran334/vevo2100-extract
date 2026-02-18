@@ -13,9 +13,9 @@ st.markdown("""
 **Instructions:**
 1. **Upload** your videos.
 2. **Select Video**: Choose which video to preview.
-3. **Offset**: If the app's frame count doesn't match your notes, adjust the **Frame Offset**.
-4. **Trim**: Use the slider or number boxes.
-5. **Process**: Generates the cropped/trimmed files.
+3. **Set FPS**: Adjusting this now updates the **Time** display and **Motion Preview**.
+4. **Trim**: Set your frame range.
+5. **Process**: Generates the final files.
 """)
 
 # --- File Uploader ---
@@ -67,23 +67,20 @@ if uploaded_files:
         max_value=1000.0, 
         value=float(detected_fps), 
         step=1.0,
-        help="This only affects the playback speed of the SAVED video. It does not change the frame numbers."
+        help="Changing this updates the 'Time' in the preview and the speed of the output video."
     )
     
-    # --- 4. Frame Offset (New Feature) ---
+    # --- 4. Frame Offset ---
     st.sidebar.subheader("2. Frame Correction")
     offset = st.sidebar.number_input(
         "Frame Offset (+/-)",
         value=0,
         step=1,
-        help="If the video player says Frame 310 but this app says 304, set this to +6. The app will subtract this number internally so your inputs match your external notes."
+        help="Adjusts the displayed frame number to match your external notes."
     )
 
     # --- 5. Synchronized Frame Trimming ---
     st.sidebar.subheader("3. Trim Video")
-    
-    # Logic: The USER sees "Display Frames" (which equal Actual Frame + Offset)
-    # The CODE uses "Actual Frames" (0 to total_frames-1)
     
     max_display_frame = (total_frames - 1) + offset
     min_display_frame = 0 + offset
@@ -100,20 +97,16 @@ if uploaded_files:
         st.session_state.last_start = 0 + offset
         st.session_state.last_end = (total_frames - 1) + offset
 
-    # Callbacks (working with DISPLAY values)
+    # Callbacks
     def update_slider_from_num():
         s = st.session_state.num_start
         e = st.session_state.num_end
-        
         if s > e: s = e 
-        
         st.session_state.slider_range = (s, e)
-        
         if s != st.session_state.last_start:
             st.session_state.preview_frame = s
         elif e != st.session_state.last_end:
             st.session_state.preview_frame = e
-            
         st.session_state.last_start = s
         st.session_state.last_end = e
 
@@ -121,33 +114,20 @@ if uploaded_files:
         s, e = st.session_state.slider_range
         st.session_state.num_start = s
         st.session_state.num_end = e
-        
         if s != st.session_state.last_start:
             st.session_state.preview_frame = s
         elif e != st.session_state.last_end:
             st.session_state.preview_frame = e
-            
         st.session_state.last_start = s
         st.session_state.last_end = e
 
-    # A. Number Inputs
+    # Inputs
     col_start, col_end = st.sidebar.columns(2)
     with col_start:
-        st.number_input(
-            "Start Frame", 
-            value=st.session_state.num_start,
-            key="num_start", 
-            on_change=update_slider_from_num
-        )
+        st.number_input("Start Frame", value=st.session_state.num_start, key="num_start", on_change=update_slider_from_num)
     with col_end:
-        st.number_input(
-            "End Frame", 
-            value=st.session_state.num_end,
-            key="num_end", 
-            on_change=update_slider_from_num
-        )
+        st.number_input("End Frame", value=st.session_state.num_end, key="num_end", on_change=update_slider_from_num)
 
-    # B. Slider Input
     start_display, end_display = st.sidebar.slider(
         "Frame Range",
         min_value=min_display_frame,
@@ -158,22 +138,13 @@ if uploaded_files:
         on_change=update_num_from_slider
     )
     
-    # Calculate Actual Frames for processing
-    actual_start = start_display - offset
-    actual_end = end_display - offset
-    
-    # Clamp just in case user offset goes out of bounds
-    actual_start = clamp(actual_start, 0, total_frames - 1)
-    actual_end = clamp(actual_end, 0, total_frames - 1)
-
-    st.sidebar.info(f"Duration: {actual_end - actual_start + 1} frames")
+    actual_start = clamp(start_display - offset, 0, total_frames - 1)
+    actual_end = clamp(end_display - offset, 0, total_frames - 1)
 
     # --- 6. Spatial Cropping ---
     st.sidebar.subheader("4. Spatial Crop")
-    
-    default_x0, default_x1 = 0.12, 0.97
-    default_y0, default_y1 = 0.31, 0.48
-
+    default_x0, default_x1 = 0.00, 1.00
+    default_y0, default_y1 = 0.21, 0.55
     c1, c2 = st.sidebar.columns(2)
     with c1:
         x0 = st.slider("Left (%)", 0.0, 1.0, default_x0, 0.01)
@@ -186,7 +157,6 @@ if uploaded_files:
     x_end   = int(clamp(x1, 0, 1) * W)
     y_start = int(clamp(y0, 0, 1) * H)
     y_end   = int(clamp(y1, 0, 1) * H)
-
     if x_end <= x_start: x_end = x_start + 1
     if y_end <= y_start: y_end = y_start + 1
     crop_w = x_end - x_start
@@ -195,12 +165,11 @@ if uploaded_files:
     # --- 7. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
     
-    # Preview logic also needs to handle offset
     if 'preview_frame' not in st.session_state:
         st.session_state.preview_frame = 0 + offset
 
     preview_frame_display = st.slider(
-        "Scrub Timeline (Visual Check)", 
+        "Scrub Timeline", 
         min_value=min_display_frame, 
         max_value=max_display_frame, 
         value=st.session_state.preview_frame,
@@ -208,17 +177,49 @@ if uploaded_files:
         key="preview_slider"
     )
 
-    # Convert display frame back to actual frame for OpenCV
-    actual_preview_frame = preview_frame_display - offset
-    actual_preview_frame = clamp(actual_preview_frame, 0, total_frames - 1)
+    actual_preview_frame = clamp(preview_frame_display - offset, 0, total_frames - 1)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
     ret, frame_preview = cap.read()
 
     if ret:
+        # Calculate Time based on User FPS
+        # This is the key update: showing how FPS affects time
+        current_time = actual_preview_frame / user_fps
+        
         overlay = frame_preview.copy()
         cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
-        st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True, caption=f"Display Frame: {preview_frame_display} (Actual: {actual_preview_frame})")
+        
+        st.image(
+            cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 
+            use_container_width=True, 
+            caption=f"Frame: {preview_frame_display} | Time: {current_time:.3f}s (@ {user_fps} FPS)"
+        )
+        
+        # --- Motion Preview Button ---
+        st.write("Check Playback Speed:")
+        if st.button("▶️ Play 1s Clip (Motion Check)"):
+            with st.spinner("Rendering preview clip..."):
+                t_prev = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                # Writer uses the USER FPS
+                preview_writer = cv2.VideoWriter(t_prev.name, fourcc, user_fps, (crop_w, crop_h))
+                
+                # Render 1 second (or approx 30-60 frames) starting from current
+                frames_to_render = int(user_fps) 
+                cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
+                
+                for _ in range(frames_to_render):
+                    ret_p, frame_p = cap.read()
+                    if not ret_p: break
+                    crop_p = frame_p[y_start:y_end, x_start:x_end]
+                    if crop_p.shape[0] > 0 and crop_p.shape[1] > 0:
+                        preview_writer.write(crop_p)
+                
+                preview_writer.release()
+                st.video(t_prev.name)
+                # Cleanup (Video widget needs the file for a moment, so we rely on OS cleanup or next run)
+
     else:
         st.warning("Could not read frame.")
     
@@ -229,21 +230,17 @@ if uploaded_files:
     st.markdown("---")
 
     # --- 8. Batch Processing Logic ---
-    
     if 'processed_zip' not in st.session_state:
         st.session_state['processed_zip'] = None
 
     if st.button(f"Process All {len(uploaded_files)} Video(s)"):
-        
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         zip_buffer = io.BytesIO()
         
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-            
             for i, uploaded_file in enumerate(uploaded_files):
                 status_text.text(f"Processing {uploaded_file.name}...")
-                
                 uploaded_file.seek(0)
                 t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1])
                 t_in.write(uploaded_file.read())
@@ -251,7 +248,6 @@ if uploaded_files:
                 t_in.close()
 
                 vcap = cv2.VideoCapture(t_in.name)
-                
                 base_name = os.path.splitext(uploaded_file.name)[0]
                 out_name = f"{base_name}_frames_{actual_start}-{actual_end}.mp4"
                 
@@ -266,13 +262,11 @@ if uploaded_files:
                 while True:
                     ok, frame = vcap.read()
                     if not ok: break
-                    
                     if actual_start <= current_frame <= actual_end:
                         if frame.shape[0] >= y_end and frame.shape[1] >= x_end:
                             crop = frame[y_start:y_end, x_start:x_end]
                             if crop.shape[0] > 0 and crop.shape[1] > 0:
                                 writer.write(crop)
-                    
                     current_frame += 1
                     if current_frame > actual_end: break
                 
@@ -280,11 +274,9 @@ if uploaded_files:
                 writer.release()
                 try: os.unlink(t_in.name)
                 except: pass
-                
                 zipf.write(t_out_name, arcname=out_name)
                 try: os.unlink(t_out_name)
                 except: pass
-                
                 progress_bar.progress((i + 1) / len(uploaded_files))
 
         status_text.success("✅ Processing Complete!")
