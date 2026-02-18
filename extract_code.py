@@ -13,9 +13,9 @@ st.markdown("""
 **Instructions:**
 1. **Upload** your videos.
 2. **Select Video**: Choose which video to preview.
-3. **Set FPS**: Adjusting this now updates the **Time** display and **Motion Preview**.
-4. **Trim**: Set your frame range.
-5. **Process**: Generates the final files.
+3. **Offset**: **Enter '6'** (or the difference you see) in the Frame Offset box to sync the numbers.
+4. **Trim**: Set your start/end points.
+5. **Process**: Generates the cropped/trimmed files.
 """)
 
 # --- File Uploader ---
@@ -67,25 +67,26 @@ if uploaded_files:
         max_value=1000.0, 
         value=float(detected_fps), 
         step=1.0,
-        help="Changing this updates the 'Time' in the preview and the speed of the output video."
+        help="This affects the output playback speed and the 'Time' calculation."
     )
     
-    # --- 4. Frame Offset ---
+    # --- 4. Frame Offset (THE FIX) ---
     st.sidebar.subheader("2. Frame Correction")
     offset = st.sidebar.number_input(
         "Frame Offset (+/-)",
         value=0,
         step=1,
-        help="Adjusts the displayed frame number to match your external notes."
+        help="Example: If App says 311 but Video says 317, enter 6 here. The app will sync the numbers."
     )
 
     # --- 5. Synchronized Frame Trimming ---
     st.sidebar.subheader("3. Trim Video")
     
+    # Calculate bounds based on offset
     max_display_frame = (total_frames - 1) + offset
     min_display_frame = 0 + offset
     
-    st.sidebar.caption(f"Internal Frames: 0 to {total_frames-1}")
+    st.sidebar.caption(f"Raw Internal Frames: 0 to {total_frames-1}")
 
     # Initialize State
     if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
@@ -138,8 +139,11 @@ if uploaded_files:
         on_change=update_num_from_slider
     )
     
+    # Calculate Actual Frames for processing (Subtract offset)
     actual_start = clamp(start_display - offset, 0, total_frames - 1)
     actual_end = clamp(end_display - offset, 0, total_frames - 1)
+    
+    st.sidebar.info(f"Duration: {actual_end - actual_start + 1} frames")
 
     # --- 6. Spatial Cropping ---
     st.sidebar.subheader("4. Spatial Crop")
@@ -168,6 +172,7 @@ if uploaded_files:
     if 'preview_frame' not in st.session_state:
         st.session_state.preview_frame = 0 + offset
 
+    # Slider allows scrubbing full video, even outside trim
     preview_frame_display = st.slider(
         "Scrub Timeline", 
         min_value=min_display_frame, 
@@ -183,42 +188,32 @@ if uploaded_files:
     ret, frame_preview = cap.read()
 
     if ret:
-        # Calculate Time based on User FPS
-        # This is the key update: showing how FPS affects time
         current_time = actual_preview_frame / user_fps
-        
         overlay = frame_preview.copy()
         cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
         
+        # Display the offset-corrected frame number
         st.image(
             cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 
             use_container_width=True, 
-            caption=f"Frame: {preview_frame_display} | Time: {current_time:.3f}s (@ {user_fps} FPS)"
+            caption=f"App Frame: {preview_frame_display} | Vevo Time: {current_time:.3f}s"
         )
         
-        # --- Motion Preview Button ---
-        st.write("Check Playback Speed:")
         if st.button("▶️ Play 1s Clip (Motion Check)"):
             with st.spinner("Rendering preview clip..."):
                 t_prev = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                # Writer uses the USER FPS
                 preview_writer = cv2.VideoWriter(t_prev.name, fourcc, user_fps, (crop_w, crop_h))
-                
-                # Render 1 second (or approx 30-60 frames) starting from current
                 frames_to_render = int(user_fps) 
                 cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
-                
                 for _ in range(frames_to_render):
                     ret_p, frame_p = cap.read()
                     if not ret_p: break
                     crop_p = frame_p[y_start:y_end, x_start:x_end]
                     if crop_p.shape[0] > 0 and crop_p.shape[1] > 0:
                         preview_writer.write(crop_p)
-                
                 preview_writer.release()
                 st.video(t_prev.name)
-                # Cleanup (Video widget needs the file for a moment, so we rely on OS cleanup or next run)
 
     else:
         st.warning("Could not read frame.")
