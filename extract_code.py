@@ -13,7 +13,7 @@ st.markdown("""
 **Instructions:**
 1. **Upload** your videos.
 2. **Select Video**: Choose which video to preview.
-3. **Trim**: Adjusting the start/end automatically updates the preview image to that frame.
+3. **Trim**: Use the slider or number boxes. The preview updates automatically.
 4. **Process**: Generates the cropped/trimmed files.
 """)
 
@@ -73,11 +73,8 @@ if uploaded_files:
     st.sidebar.caption(f"Total Frames: {total_frames}")
 
     # --- Initialization & State Management ---
-    # We track 'last_start' and 'last_end' to know WHICH handle moved, 
-    # so we can update the preview to that specific frame.
-    
+    # We initialize the state variables if they don't exist OR if the user switched videos
     if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
-        # Reset state when a new video is selected
         st.session_state.current_video_name = selected_name
         st.session_state.num_start = 0
         st.session_state.num_end = total_frames - 1
@@ -91,13 +88,14 @@ if uploaded_files:
         s = st.session_state.num_start
         e = st.session_state.num_end
         
+        # Validation
         if s > e: s = e 
         if s < 0: s = 0
         if e >= total_frames: e = total_frames - 1
         
         st.session_state.slider_range = (s, e)
         
-        # Update Preview based on what changed
+        # Update Preview
         if s != st.session_state.last_start:
             st.session_state.preview_frame = s
         elif e != st.session_state.last_end:
@@ -111,7 +109,7 @@ if uploaded_files:
         st.session_state.num_start = s
         st.session_state.num_end = e
         
-        # Update Preview based on what changed
+        # Update Preview
         if s != st.session_state.last_start:
             st.session_state.preview_frame = s
         elif e != st.session_state.last_end:
@@ -140,10 +138,12 @@ if uploaded_files:
         )
 
     # B. Slider Input
+    # FIXED: Added 'value=st.session_state.slider_range' to force range-slider mode
     start_f, end_f = st.sidebar.slider(
         "Frame Range Slider",
         min_value=0,
         max_value=total_frames - 1,
+        value=st.session_state.slider_range, # <--- This fixes the TypeError
         key="slider_range",
         step=1,
         on_change=update_num_from_slider
@@ -178,24 +178,20 @@ if uploaded_files:
     # --- 6. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
     
-    # Ensure preview frame is within valid bounds
     if 'preview_frame' not in st.session_state:
         st.session_state.preview_frame = 0
     
-    # Clamp valid range
+    # Ensure bounds
     valid_preview = clamp(st.session_state.preview_frame, 0, total_frames - 1)
 
     # The Preview Slider
-    # We use a unique key, but we set the 'value' to the session state variable
-    # that is updated by the trim controls.
     preview_frame_idx = st.slider(
         "Scrub Timeline to Verify Crop", 
         min_value=0, 
         max_value=total_frames - 1, 
         value=valid_preview,
         step=1,
-        key="preview_slider" # Note: If user moves THIS slider manually, it works independently.
-                             # But if they touch the trim settings, this slider will jump.
+        key="preview_slider"
     )
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, preview_frame_idx)
@@ -205,6 +201,8 @@ if uploaded_files:
         overlay = frame_preview.copy()
         cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
         st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True, caption=f"Frame: {preview_frame_idx}")
+    else:
+        st.warning("Could not read frame.")
     
     cap.release()
     try: os.unlink(tfile.name)
