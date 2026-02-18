@@ -13,7 +13,7 @@ st.markdown("""
 **Instructions:**
 1. **Upload** your videos.
 2. **Select Video**: Choose which video to preview.
-3. **Trim**: Use the slider or number boxes. The preview updates automatically.
+3. **Trim**: Moving the slider updates the boxes, and typing in the boxes updates the slider.
 4. **Process**: Generates the cropped/trimmed files.
 """)
 
@@ -35,6 +35,7 @@ if uploaded_files:
     selected_file = file_map[selected_name]
 
     # --- 2. Read Metadata ---
+    # Save temp file to read video info
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(selected_file.name)[1])
     selected_file.seek(0)
     tfile.write(selected_file.read())
@@ -72,51 +73,35 @@ if uploaded_files:
     st.sidebar.subheader("2. Trim Video (by Frames)")
     st.sidebar.caption(f"Total Frames: {total_frames}")
 
-    # --- Initialization & State Management ---
-    # We initialize the state variables if they don't exist OR if the user switched videos
+    # Initialize Session State for this specific video file
+    # If we switch videos, we need to reset the state to avoid "index out of bounds" errors
     if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
         st.session_state.current_video_name = selected_name
         st.session_state.num_start = 0
         st.session_state.num_end = total_frames - 1
         st.session_state.slider_range = (0, total_frames - 1)
-        st.session_state.preview_frame = 0
-        st.session_state.last_start = 0
-        st.session_state.last_end = total_frames - 1
 
-    # --- Callbacks ---
+    # --- Callbacks for Syncing ---
     def update_slider_from_num():
+        # Get values from number boxes
         s = st.session_state.num_start
         e = st.session_state.num_end
         
-        # Validation
-        if s > e: s = e 
+        # Enforce valid range for slider
+        if s > e: s = e # Prevent start > end
         if s < 0: s = 0
         if e >= total_frames: e = total_frames - 1
         
+        # Update the slider key
         st.session_state.slider_range = (s, e)
-        
-        # Update Preview
-        if s != st.session_state.last_start:
-            st.session_state.preview_frame = s
-        elif e != st.session_state.last_end:
-            st.session_state.preview_frame = e
-            
-        st.session_state.last_start = s
-        st.session_state.last_end = e
 
     def update_num_from_slider():
+        # Get values from slider
         s, e = st.session_state.slider_range
+        
+        # Update the number box keys
         st.session_state.num_start = s
         st.session_state.num_end = e
-        
-        # Update Preview
-        if s != st.session_state.last_start:
-            st.session_state.preview_frame = s
-        elif e != st.session_state.last_end:
-            st.session_state.preview_frame = e
-            
-        st.session_state.last_start = s
-        st.session_state.last_end = e
 
     # A. Number Inputs
     col_start, col_end = st.sidebar.columns(2)
@@ -138,12 +123,10 @@ if uploaded_files:
         )
 
     # B. Slider Input
-    # FIXED: Added 'value=st.session_state.slider_range' to force range-slider mode
     start_f, end_f = st.sidebar.slider(
         "Frame Range Slider",
         min_value=0,
         max_value=total_frames - 1,
-        value=st.session_state.slider_range, # <--- This fixes the TypeError
         key="slider_range",
         step=1,
         on_change=update_num_from_slider
@@ -178,20 +161,12 @@ if uploaded_files:
     # --- 6. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
     
-    if 'preview_frame' not in st.session_state:
-        st.session_state.preview_frame = 0
-    
-    # Ensure bounds
-    valid_preview = clamp(st.session_state.preview_frame, 0, total_frames - 1)
-
-    # The Preview Slider
     preview_frame_idx = st.slider(
         "Scrub Timeline to Verify Crop", 
         min_value=0, 
         max_value=total_frames - 1, 
-        value=valid_preview,
-        step=1,
-        key="preview_slider"
+        value=min(start_f, total_frames - 1),
+        step=1
     )
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, preview_frame_idx)
@@ -201,8 +176,6 @@ if uploaded_files:
         overlay = frame_preview.copy()
         cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
         st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True, caption=f"Frame: {preview_frame_idx}")
-    else:
-        st.warning("Could not read frame.")
     
     cap.release()
     try: os.unlink(tfile.name)
