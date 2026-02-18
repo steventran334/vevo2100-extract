@@ -147,8 +147,8 @@ if uploaded_files:
 
     # --- 6. Spatial Cropping ---
     st.sidebar.subheader("4. Spatial Crop")
-    default_x0, default_x1 = 0.00, 1.00
-    default_y0, default_y1 = 0.21, 0.55
+    default_x0, default_x1 = 0.12, 0.97
+    default_y0, default_y1 = 0.30, 0.48
     c1, c2 = st.sidebar.columns(2)
     with c1:
         x0 = st.slider("Left (%)", 0.0, 1.0, default_x0, 0.01)
