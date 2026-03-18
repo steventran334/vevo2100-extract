@@ -197,7 +197,7 @@ if uploaded_files:
         current_time = actual_preview_frame / user_fps
         overlay = frame_preview.copy()
         
-        # Draw the two crop boxes
+        # Draw the two crop boxes on the overlay
         cv2.rectangle(overlay, (lx_start, y_start), (lx_end, y_end), (0, 255, 0), 2)
         cv2.rectangle(overlay, (rx_start, y_start), (rx_end, y_end), (0, 255, 0), 2)
         
@@ -207,28 +207,52 @@ if uploaded_files:
             caption=f"Frame: {preview_frame_display} | Vevo Time: {current_time:.3f}s"
         )
         
-        if st.button("▶️ Play 1s Clip (Motion Check)"):
-            with st.spinner("Rendering preview clip..."):
-                t_prev = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                preview_writer = cv2.VideoWriter(t_prev.name, fourcc, user_fps, (final_w, crop_h))
-                frames_to_render = int(user_fps) 
-                cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
-                
-                for _ in range(frames_to_render):
-                    ret_p, frame_p = cap.read()
-                    if not ret_p: break
+        # Preview Controls
+        col_btn1, col_btn2 = st.columns(2)
+        
+        with col_btn1:
+            if st.button("▶️ Play 1s Clip"):
+                with st.spinner("Rendering preview clip..."):
+                    t_prev = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    preview_writer = cv2.VideoWriter(t_prev.name, fourcc, user_fps, (final_w, crop_h))
+                    frames_to_render = int(user_fps) 
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
                     
-                    # Extract both panes and stitch them together
-                    crop_left = frame_p[y_start:y_end, lx_start:lx_end]
-                    crop_right = frame_p[y_start:y_end, rx_start:rx_end]
-                    
-                    if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
-                        stitched_frame = cv2.hconcat([crop_left, crop_right])
-                        preview_writer.write(stitched_frame)
+                    for _ in range(frames_to_render):
+                        ret_p, frame_p = cap.read()
+                        if not ret_p: break
                         
-                preview_writer.release()
-                st.video(t_prev.name)
+                        # Extract both panes and stitch them together
+                        crop_left = frame_p[y_start:y_end, lx_start:lx_end]
+                        crop_right = frame_p[y_start:y_end, rx_start:rx_end]
+                        
+                        if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
+                            stitched_frame = cv2.hconcat([crop_left, crop_right])
+                            preview_writer.write(stitched_frame)
+                            
+                    preview_writer.release()
+                    st.video(t_prev.name)
+                    
+        with col_btn2:
+            # Slice from the original clean frame, not the overlay
+            crop_left_clean = frame_preview[y_start:y_end, lx_start:lx_end]
+            crop_right_clean = frame_preview[y_start:y_end, rx_start:rx_end]
+            
+            if crop_left_clean.shape[0] > 0 and crop_right_clean.shape[0] > 0:
+                stitched_clean = cv2.hconcat([crop_left_clean, crop_right_clean])
+                is_success, buffer = cv2.imencode(".png", stitched_clean)
+                
+                if is_success:
+                    base_name = os.path.splitext(selected_name)[0]
+                    dl_name = f"{base_name}_frame_{preview_frame_display}.png"
+                    
+                    st.download_button(
+                        label="📸 Download Current Frame",
+                        data=buffer.tobytes(),
+                        file_name=dl_name,
+                        mime="image/png"
+                    )
 
     else:
         st.warning("Could not read frame.")
