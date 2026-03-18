@@ -69,23 +69,24 @@ if uploaded_files:
         help="This affects the output playback speed and the 'Time' calculation."
     )
     
-    # --- 4. Synchronized Frame Trimming ---
+    # --- 4. Synchronized Frame Trimming (1-Based Indexing) ---
     st.sidebar.subheader("2. Trim Video")
     
-    max_display_frame = total_frames - 1
-    min_display_frame = 0
+    # UI Display bounds starting at 1
+    max_display_frame = total_frames
+    min_display_frame = 1
     
-    st.sidebar.caption(f"Raw Internal Frames: 0 to {total_frames-1}")
+    st.sidebar.caption(f"Total Frames: {total_frames}")
 
-    # Initialize State
+    # Initialize State with 1-based indexing
     if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
         st.session_state.current_video_name = selected_name
-        st.session_state.num_start = 0
-        st.session_state.num_end = total_frames - 1
-        st.session_state.slider_range = (0, total_frames - 1)
-        st.session_state.preview_frame = 0
-        st.session_state.last_start = 0
-        st.session_state.last_end = total_frames - 1
+        st.session_state.num_start = 1
+        st.session_state.num_end = total_frames
+        st.session_state.slider_range = (1, total_frames)
+        st.session_state.preview_frame = 1
+        st.session_state.last_start = 1
+        st.session_state.last_end = total_frames
 
     # Callbacks
     def update_slider_from_num():
@@ -128,8 +129,9 @@ if uploaded_files:
         on_change=update_num_from_slider
     )
     
-    actual_start = clamp(start_display, 0, total_frames - 1)
-    actual_end = clamp(end_display, 0, total_frames - 1)
+    # Map back to 0-based index for OpenCV internal processing
+    actual_start = clamp(start_display - 1, 0, total_frames - 1)
+    actual_end = clamp(end_display - 1, 0, total_frames - 1)
     
     st.sidebar.info(f"Duration: {actual_end - actual_start + 1} frames")
 
@@ -139,11 +141,11 @@ if uploaded_files:
     default_y0, default_y1 = 0.30, 0.48
     c1, c2 = st.sidebar.columns(2)
     with c1:
-        x0 = st.slider("Left (%)", 0.0, 1.0, default_x0, 0.01)
-        x1 = st.slider("Right (%)", 0.0, 1.0, default_x1, 0.01)
+        x0 = st.slider("Left (%)", 0.0, 1.0, default_x0, 0.08)
+        x1 = st.slider("Right (%)", 0.0, 1.0, default_x1, 0.88)
     with c2:
-        y0 = st.slider("Top (%)", 0.0, 1.0, default_y0, 0.01)
-        y1 = st.slider("Bottom (%)", 0.0, 1.0, default_y1, 0.01)
+        y0 = st.slider("Top (%)", 0.0, 1.0, default_y0, 0.35)
+        y1 = st.slider("Bottom (%)", 0.0, 1.0, default_y1, 0.48)
 
     x_start = int(clamp(x0, 0, 1) * W)
     x_end   = int(clamp(x1, 0, 1) * W)
@@ -158,7 +160,7 @@ if uploaded_files:
     st.subheader(f"Preview: {selected_name}")
     
     if 'preview_frame' not in st.session_state:
-        st.session_state.preview_frame = 0
+        st.session_state.preview_frame = 1
 
     preview_frame_display = st.slider(
         "Scrub Timeline", 
@@ -169,7 +171,8 @@ if uploaded_files:
         key="preview_slider"
     )
 
-    actual_preview_frame = clamp(preview_frame_display, 0, total_frames - 1)
+    # Convert the 1-based display value to 0-based for OpenCV
+    actual_preview_frame = clamp(preview_frame_display - 1, 0, total_frames - 1)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
     ret, frame_preview = cap.read()
@@ -230,7 +233,9 @@ if uploaded_files:
 
                 vcap = cv2.VideoCapture(t_in.name)
                 base_name = os.path.splitext(uploaded_file.name)[0]
-                out_name = f"{base_name}_frames_{actual_start}-{actual_end}.mp4"
+                
+                # Output filename uses the intuitive 1-based display numbers
+                out_name = f"{base_name}_frames_{start_display}-{end_display}.mp4"
                 
                 t_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
                 t_out_name = t_out.name
