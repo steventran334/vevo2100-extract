@@ -303,8 +303,8 @@ if uploaded_files:
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                     writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (final_w, crop_h))
                 else:
-                    # imageio writer for GIFs
-                    writer = imageio.get_writer(t_out_name, mode='I', fps=user_fps)
+                    # imageio writer for GIFs with loop=0 for infinite looping
+                    writer = imageio.get_writer(t_out_name, mode='I', fps=user_fps, loop=0)
                 
                 current_frame = 0
                 while True:
