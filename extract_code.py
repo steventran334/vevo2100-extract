@@ -137,15 +137,15 @@ if uploaded_files:
 
     # --- 5. Spatial Cropping ---
     st.sidebar.subheader("3. Spatial Crop")
-    default_x0, default_x1 = 0.12, 0.97
-    default_y0, default_y1 = 0.30, 0.48
+    default_x0, default_x1 = 0.08, 0.88
+    default_y0, default_y1 = 0.35, 0.48
     c1, c2 = st.sidebar.columns(2)
     with c1:
-        x0 = st.slider("Left (%)", 0.0, 1.0, default_x0, 0.08)
-        x1 = st.slider("Right (%)", 0.0, 1.0, default_x1, 0.88)
+        x0 = st.slider("Left (%)", 0.0, 1.0, default_x0, 0.01)
+        x1 = st.slider("Right (%)", 0.0, 1.0, default_x1, 0.01)
     with c2:
-        y0 = st.slider("Top (%)", 0.0, 1.0, default_y0, 0.35)
-        y1 = st.slider("Bottom (%)", 0.0, 1.0, default_y1, 0.48)
+        y0 = st.slider("Top (%)", 0.0, 1.0, default_y0, 0.01)
+        y1 = st.slider("Bottom (%)", 0.0, 1.0, default_y1, 0.01)
 
     x_start = int(clamp(x0, 0, 1) * W)
     x_end   = int(clamp(x1, 0, 1) * W)
