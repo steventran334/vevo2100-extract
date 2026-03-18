@@ -11,17 +11,16 @@ st.title("Vevo 2100 Video Editor (Batch)")
 
 st.markdown("""
 **Instructions:**
-1. **Upload** your videos.
+1. **Upload** your videos (GIFs recommended for exact frame syncing).
 2. **Select Video**: Choose which video to preview.
-3. **Offset**: **Enter '6'** (or the difference you see) in the Frame Offset box to sync the numbers.
-4. **Trim**: Set your start/end points.
-5. **Process**: Generates the cropped/trimmed files.
+3. **Trim**: Set your start/end points.
+4. **Process**: Generates the cropped/trimmed files.
 """)
 
 # --- File Uploader ---
 uploaded_files = st.file_uploader(
-    "Upload video(s) (.mp4, .avi, .mov)", 
-    type=["mp4", "avi", "mov"], 
+    "Upload video(s) (.gif, .mp4, .avi, .mov)", 
+    type=["gif", "mp4", "avi", "mov"], 
     accept_multiple_files=True
 )
 
@@ -70,33 +69,23 @@ if uploaded_files:
         help="This affects the output playback speed and the 'Time' calculation."
     )
     
-    # --- 4. Frame Offset (THE FIX) ---
-    st.sidebar.subheader("2. Frame Correction")
-    offset = st.sidebar.number_input(
-        "Frame Offset (+/-)",
-        value=0,
-        step=1,
-        help="Example: If App says 311 but Video says 317, enter 6 here. The app will sync the numbers."
-    )
-
-    # --- 5. Synchronized Frame Trimming ---
-    st.sidebar.subheader("3. Trim Video")
+    # --- 4. Synchronized Frame Trimming ---
+    st.sidebar.subheader("2. Trim Video")
     
-    # Calculate bounds based on offset
-    max_display_frame = (total_frames - 1) + offset
-    min_display_frame = 0 + offset
+    max_display_frame = total_frames - 1
+    min_display_frame = 0
     
     st.sidebar.caption(f"Raw Internal Frames: 0 to {total_frames-1}")
 
     # Initialize State
     if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
         st.session_state.current_video_name = selected_name
-        st.session_state.num_start = 0 + offset
-        st.session_state.num_end = (total_frames - 1) + offset
-        st.session_state.slider_range = (0 + offset, (total_frames - 1) + offset)
-        st.session_state.preview_frame = 0 + offset
-        st.session_state.last_start = 0 + offset
-        st.session_state.last_end = (total_frames - 1) + offset
+        st.session_state.num_start = 0
+        st.session_state.num_end = total_frames - 1
+        st.session_state.slider_range = (0, total_frames - 1)
+        st.session_state.preview_frame = 0
+        st.session_state.last_start = 0
+        st.session_state.last_end = total_frames - 1
 
     # Callbacks
     def update_slider_from_num():
@@ -139,14 +128,13 @@ if uploaded_files:
         on_change=update_num_from_slider
     )
     
-    # Calculate Actual Frames for processing (Subtract offset)
-    actual_start = clamp(start_display - offset, 0, total_frames - 1)
-    actual_end = clamp(end_display - offset, 0, total_frames - 1)
+    actual_start = clamp(start_display, 0, total_frames - 1)
+    actual_end = clamp(end_display, 0, total_frames - 1)
     
     st.sidebar.info(f"Duration: {actual_end - actual_start + 1} frames")
 
-    # --- 6. Spatial Cropping ---
-    st.sidebar.subheader("4. Spatial Crop")
+    # --- 5. Spatial Cropping ---
+    st.sidebar.subheader("3. Spatial Crop")
     default_x0, default_x1 = 0.12, 0.97
     default_y0, default_y1 = 0.30, 0.48
     c1, c2 = st.sidebar.columns(2)
@@ -166,13 +154,12 @@ if uploaded_files:
     crop_w = x_end - x_start
     crop_h = y_end - y_start
 
-    # --- 7. Interactive Preview ---
+    # --- 6. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
     
     if 'preview_frame' not in st.session_state:
-        st.session_state.preview_frame = 0 + offset
+        st.session_state.preview_frame = 0
 
-    # Slider allows scrubbing full video, even outside trim
     preview_frame_display = st.slider(
         "Scrub Timeline", 
         min_value=min_display_frame, 
@@ -182,7 +169,7 @@ if uploaded_files:
         key="preview_slider"
     )
 
-    actual_preview_frame = clamp(preview_frame_display - offset, 0, total_frames - 1)
+    actual_preview_frame = clamp(preview_frame_display, 0, total_frames - 1)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
     ret, frame_preview = cap.read()
@@ -192,11 +179,10 @@ if uploaded_files:
         overlay = frame_preview.copy()
         cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
         
-        # Display the offset-corrected frame number
         st.image(
             cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 
             use_container_width=True, 
-            caption=f"App Frame: {preview_frame_display} | Vevo Time: {current_time:.3f}s"
+            caption=f"Frame: {preview_frame_display} | Vevo Time: {current_time:.3f}s"
         )
         
         if st.button("▶️ Play 1s Clip (Motion Check)"):
@@ -224,7 +210,7 @@ if uploaded_files:
 
     st.markdown("---")
 
-    # --- 8. Batch Processing Logic ---
+    # --- 7. Batch Processing Logic ---
     if 'processed_zip' not in st.session_state:
         st.session_state['processed_zip'] = None
 
