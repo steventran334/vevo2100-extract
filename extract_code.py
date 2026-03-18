@@ -14,7 +14,8 @@ st.markdown("""
 1. **Upload** your videos (GIFs recommended for exact frame syncing).
 2. **Select Video**: Choose which video to preview.
 3. **Trim**: Set your start/end points.
-4. **Process**: Generates the cropped/trimmed files.
+4. **Split-Pane Crop**: Box out the B-mode and NLC panes. The app will stitch them together.
+5. **Process**: Generates the cropped/trimmed files.
 """)
 
 # --- File Uploader ---
@@ -135,26 +136,41 @@ if uploaded_files:
     
     st.sidebar.info(f"Duration: {actual_end - actual_start + 1} frames")
 
-    # --- 5. Spatial Cropping ---
-    st.sidebar.subheader("3. Spatial Crop")
-    default_x0, default_x1 = 0.08, 0.88
-    default_y0, default_y1 = 0.35, 0.48
+    # --- 5. Split-Pane Spatial Cropping ---
+    st.sidebar.subheader("3. Split-Pane Crop")
+    
+    st.sidebar.markdown("**Global Height**")
     c1, c2 = st.sidebar.columns(2)
-    with c1:
-        x0 = st.slider("Left (%)", 0.0, 1.0, default_x0, 0.01)
-        x1 = st.slider("Right (%)", 0.0, 1.0, default_x1, 0.01)
-    with c2:
-        y0 = st.slider("Top (%)", 0.0, 1.0, default_y0, 0.01)
-        y1 = st.slider("Bottom (%)", 0.0, 1.0, default_y1, 0.01)
+    with c1: y0 = st.slider("Top (%)", 0.0, 1.0, 0.35, 0.01)
+    with c2: y1 = st.slider("Bottom (%)", 0.0, 1.0, 0.48, 0.01)
 
-    x_start = int(clamp(x0, 0, 1) * W)
-    x_end   = int(clamp(x1, 0, 1) * W)
+    st.sidebar.markdown("**Left Image (B-Mode)**")
+    c3, c4 = st.sidebar.columns(2)
+    with c3: lx0 = st.slider("L-Start (%)", 0.0, 1.0, 0.08, 0.01)
+    with c4: lx1 = st.slider("L-End (%)", 0.0, 1.0, 0.48, 0.01)
+
+    st.sidebar.markdown("**Right Image (NLC)**")
+    c5, c6 = st.sidebar.columns(2)
+    with c5: rx0 = st.slider("R-Start (%)", 0.0, 1.0, 0.52, 0.01)
+    with c6: rx1 = st.slider("R-End (%)", 0.0, 1.0, 0.92, 0.01)
+
+    # Convert percentages to pixels
     y_start = int(clamp(y0, 0, 1) * H)
     y_end   = int(clamp(y1, 0, 1) * H)
-    if x_end <= x_start: x_end = x_start + 1
+    lx_start = int(clamp(lx0, 0, 1) * W)
+    lx_end   = int(clamp(lx1, 0, 1) * W)
+    rx_start = int(clamp(rx0, 0, 1) * W)
+    rx_end   = int(clamp(rx1, 0, 1) * W)
+
+    # Failsafes
     if y_end <= y_start: y_end = y_start + 1
-    crop_w = x_end - x_start
+    if lx_end <= lx_start: lx_end = lx_start + 1
+    if rx_end <= rx_start: rx_end = rx_start + 1
+
     crop_h = y_end - y_start
+    crop_w_left = lx_end - lx_start
+    crop_w_right = rx_end - rx_start
+    final_w = crop_w_left + crop_w_right
 
     # --- 6. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
@@ -180,7 +196,10 @@ if uploaded_files:
     if ret:
         current_time = actual_preview_frame / user_fps
         overlay = frame_preview.copy()
-        cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 255, 0), 2)
+        
+        # Draw the two crop boxes
+        cv2.rectangle(overlay, (lx_start, y_start), (lx_end, y_end), (0, 255, 0), 2)
+        cv2.rectangle(overlay, (rx_start, y_start), (rx_end, y_end), (0, 255, 0), 2)
         
         st.image(
             cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 
@@ -192,15 +211,22 @@ if uploaded_files:
             with st.spinner("Rendering preview clip..."):
                 t_prev = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                preview_writer = cv2.VideoWriter(t_prev.name, fourcc, user_fps, (crop_w, crop_h))
+                preview_writer = cv2.VideoWriter(t_prev.name, fourcc, user_fps, (final_w, crop_h))
                 frames_to_render = int(user_fps) 
                 cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
+                
                 for _ in range(frames_to_render):
                     ret_p, frame_p = cap.read()
                     if not ret_p: break
-                    crop_p = frame_p[y_start:y_end, x_start:x_end]
-                    if crop_p.shape[0] > 0 and crop_p.shape[1] > 0:
-                        preview_writer.write(crop_p)
+                    
+                    # Extract both panes and stitch them together
+                    crop_left = frame_p[y_start:y_end, lx_start:lx_end]
+                    crop_right = frame_p[y_start:y_end, rx_start:rx_end]
+                    
+                    if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
+                        stitched_frame = cv2.hconcat([crop_left, crop_right])
+                        preview_writer.write(stitched_frame)
+                        
                 preview_writer.release()
                 st.video(t_prev.name)
 
@@ -242,17 +268,22 @@ if uploaded_files:
                 t_out.close()
                 
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (crop_w, crop_h))
+                writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (final_w, crop_h))
                 
                 current_frame = 0
                 while True:
                     ok, frame = vcap.read()
                     if not ok: break
                     if actual_start <= current_frame <= actual_end:
-                        if frame.shape[0] >= y_end and frame.shape[1] >= x_end:
-                            crop = frame[y_start:y_end, x_start:x_end]
-                            if crop.shape[0] > 0 and crop.shape[1] > 0:
-                                writer.write(crop)
+                        # Ensure frame bounds are valid before slicing
+                        if frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
+                            crop_left = frame[y_start:y_end, lx_start:lx_end]
+                            crop_right = frame[y_start:y_end, rx_start:rx_end]
+                            
+                            if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
+                                stitched_frame = cv2.hconcat([crop_left, crop_right])
+                                writer.write(stitched_frame)
+                                
                     current_frame += 1
                     if current_frame > actual_end: break
                 
