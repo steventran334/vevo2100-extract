@@ -4,6 +4,7 @@ import tempfile
 import os
 import zipfile
 import io
+import imageio
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Vevo 2100 Frame Editor", layout="centered")
@@ -15,7 +16,8 @@ st.markdown("""
 2. **Select Video**: Choose which video to preview.
 3. **Trim**: Set your start/end points.
 4. **Split-Pane Crop**: Box out the B-mode and NLC panes. The app will stitch them together.
-5. **Process**: Generates the cropped/trimmed files.
+5. **Format**: Choose MP4 or GIF for your final downloaded files.
+6. **Process**: Generates the cropped/trimmed files.
 """)
 
 # --- File Uploader ---
@@ -172,7 +174,11 @@ if uploaded_files:
     crop_w_right = rx_end - rx_start
     final_w = crop_w_left + crop_w_right
 
-    # --- 6. Interactive Preview ---
+    # --- 6. Export Format Selection ---
+    st.sidebar.subheader("4. Export Format")
+    export_format = st.sidebar.radio("Choose output format:", ["MP4", "GIF"])
+
+    # --- 7. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
     
     if 'preview_frame' not in st.session_state:
@@ -263,11 +269,11 @@ if uploaded_files:
 
     st.markdown("---")
 
-    # --- 7. Batch Processing Logic ---
+    # --- 8. Batch Processing Logic ---
     if 'processed_zip' not in st.session_state:
         st.session_state['processed_zip'] = None
 
-    if st.button(f"Process All {len(uploaded_files)} Video(s)"):
+    if st.button(f"Process All {len(uploaded_files)} Video(s) as {export_format}"):
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         zip_buffer = io.BytesIO()
@@ -284,15 +290,21 @@ if uploaded_files:
                 vcap = cv2.VideoCapture(t_in.name)
                 base_name = os.path.splitext(uploaded_file.name)[0]
                 
-                # Output filename uses the intuitive 1-based display numbers
-                out_name = f"{base_name}_frames_{start_display}-{end_display}.mp4"
+                # Output filename dynamically sets the extension
+                ext = ".mp4" if export_format == "MP4" else ".gif"
+                out_name = f"{base_name}_frames_{start_display}-{end_display}{ext}"
                 
-                t_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                t_out = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
                 t_out_name = t_out.name
                 t_out.close()
                 
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (final_w, crop_h))
+                # Initialize correct writer based on format
+                if export_format == "MP4":
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (final_w, crop_h))
+                else:
+                    # imageio writer for GIFs
+                    writer = imageio.get_writer(t_out_name, mode='I', fps=user_fps)
                 
                 current_frame = 0
                 while True:
@@ -306,13 +318,25 @@ if uploaded_files:
                             
                             if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
                                 stitched_frame = cv2.hconcat([crop_left, crop_right])
-                                writer.write(stitched_frame)
+                                
+                                if export_format == "MP4":
+                                    writer.write(stitched_frame)
+                                else:
+                                    # imageio requires RGB format, OpenCV uses BGR natively
+                                    rgb_frame = cv2.cvtColor(stitched_frame, cv2.COLOR_BGR2RGB)
+                                    writer.append_data(rgb_frame)
                                 
                     current_frame += 1
                     if current_frame > actual_end: break
                 
                 vcap.release()
-                writer.release()
+                
+                # Release correct writer
+                if export_format == "MP4":
+                    writer.release()
+                else:
+                    writer.close()
+                    
                 try: os.unlink(t_in.name)
                 except: pass
                 zipf.write(t_out_name, arcname=out_name)
