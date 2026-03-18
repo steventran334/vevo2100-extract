@@ -147,12 +147,12 @@ if uploaded_files:
     st.sidebar.markdown("**Left Image (B-Mode)**")
     c3, c4 = st.sidebar.columns(2)
     with c3: lx0 = st.slider("L-Start (%)", 0.0, 1.0, 0.08, 0.01)
-    with c4: lx1 = st.slider("L-End (%)", 0.0, 1.0, 0.48, 0.01)
+    with c4: lx1 = st.slider("L-End (%)", 0.0, 1.0, 0.42, 0.01)
 
     st.sidebar.markdown("**Right Image (NLC)**")
     c5, c6 = st.sidebar.columns(2)
-    with c5: rx0 = st.slider("R-Start (%)", 0.0, 1.0, 0.52, 0.01)
-    with c6: rx1 = st.slider("R-End (%)", 0.0, 1.0, 0.92, 0.01)
+    with c5: rx0 = st.slider("R-Start (%)", 0.0, 1.0, 0.54, 0.01)
+    with c6: rx1 = st.slider("R-End (%)", 0.0, 1.0, 0.88, 0.01)
 
     # Convert percentages to pixels
     y_start = int(clamp(y0, 0, 1) * H)
