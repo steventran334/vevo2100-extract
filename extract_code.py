@@ -5,7 +5,6 @@ import os
 import zipfile
 import io
 import imageio
-import numpy as np
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Vevo 2100 Frame Editor", layout="centered")
@@ -13,188 +12,346 @@ st.title("Vevo 2100 Video Editor (Batch)")
 
 st.markdown("""
 **Instructions:**
-1. **Upload** your videos.
-2. **Setup**: Use the sidebar to set global crop and trim settings.
-3. **Arrange**: Use the "Video Ordering" section to decide how they appear in the merged video.
-4. **Process**: Download individual files or a single merged grid video.
+1. **Upload** your videos (GIFs recommended for exact frame syncing).
+2. **Select Video**: Choose which video to preview.
+3. **Trim**: Set your start/end points.
+4. **Split-Pane Crop**: Box out the B-mode and NLC panes. The app will stitch them together.
+5. **Format**: Choose MP4 or GIF for your final downloaded files.
+6. **Process**: Generates the cropped/trimmed files.
 """)
 
 # --- File Uploader ---
 uploaded_files = st.file_uploader(
-    "Upload video(s) (.gif, .mp4, .avi, .mov)", 
-    type=["gif", "mp4", "avi", "mov"], 
-    accept_multiple_files=True
+    "Upload video(s) (.gif, .mp4, .avi, .mov)", 
+    type=["gif", "mp4", "avi", "mov"], 
+    accept_multiple_files=True
 )
 
 def clamp(val, lo, hi):
-    return max(lo, min(hi, val))
+    return max(lo, min(hi, val))
 
 if uploaded_files:
-    file_map = {f.name: f for f in uploaded_files}
-    file_names = list(file_map.keys())
-    
-    # --- 1. Video Selector for Preview ---
-    selected_name = st.selectbox("Select Video to Preview/Setup", file_names)
-    selected_file = file_map[selected_name]
+    
+    # --- 1. Video Selector ---
+    file_map = {f.name: f for f in uploaded_files}
+    selected_name = st.selectbox("Select Video to Preview/Setup", list(file_map.keys()))
+    selected_file = file_map[selected_name]
 
-    # --- 2. Read Metadata ---
-    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(selected_file.name)[1])
-    selected_file.seek(0)
-    tfile.write(selected_file.read())
-    tfile.flush()
-    
-    cap = cv2.VideoCapture(tfile.name)
-    if not cap.isOpened():
-        total_frames, detected_fps, W, H = 100, 30.0, 640, 480
-    else:
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        detected_fps = cap.get(cv2.CAP_PROP_FPS)
-        W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if total_frames <= 0: total_frames = 100
-        if detected_fps <= 0: detected_fps = 30.0
+    # --- 2. Read Metadata ---
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(selected_file.name)[1])
+    selected_file.seek(0)
+    tfile.write(selected_file.read())
+    tfile.flush()
+    
+    cap = cv2.VideoCapture(tfile.name)
+    
+    if not cap.isOpened():
+        st.error("Error opening video file.")
+        total_frames = 1
+        detected_fps = 30.0
+        W, H = 640, 480
+    else:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        detected_fps = cap.get(cv2.CAP_PROP_FPS)
+        W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        if total_frames <= 0: total_frames = 100
+        if detected_fps <= 0: detected_fps = 30.0
 
-    # --- SIDEBAR SETTINGS ---
-    st.sidebar.header("Processing Settings")
+    st.sidebar.header("Processing Settings")
 
-    # 1. FPS
-    user_fps = st.sidebar.number_input("Capture FPS", 1.0, 1000.0, float(detected_fps))
-    
-    # 2. Trim
-    st.sidebar.subheader("2. Trim Video")
-    if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
-        st.session_state.current_video_name = selected_name
-        st.session_state.num_start, st.session_state.num_end = 1, total_frames
-        st.session_state.slider_range = (1, total_frames)
-        st.session_state.preview_frame = 1
+    # --- 3. FPS Input ---
+    st.sidebar.subheader("1. Playback Speed")
+    user_fps = st.sidebar.number_input(
+        "Capture FPS", 
+        min_value=1.0, 
+        max_value=1000.0, 
+        value=float(detected_fps), 
+        step=1.0,
+        help="This affects the output playback speed and the 'Time' calculation."
+    )
+    
+    # --- 4. Synchronized Frame Trimming (1-Based Indexing) ---
+    st.sidebar.subheader("2. Trim Video")
+    
+    # UI Display bounds starting at 1
+    max_display_frame = total_frames
+    min_display_frame = 1
+    
+    st.sidebar.caption(f"Total Frames: {total_frames}")
 
-    def update_sync():
-        s, e = st.session_state.slider_range
-        st.session_state.num_start, st.session_state.num_end = s, e
+    # Initialize State with 1-based indexing
+    if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
+        st.session_state.current_video_name = selected_name
+        st.session_state.num_start = 1
+        st.session_state.num_end = total_frames
+        st.session_state.slider_range = (1, total_frames)
+        st.session_state.preview_frame = 1
+        st.session_state.last_start = 1
+        st.session_state.last_end = total_frames
 
-    col_start, col_end = st.sidebar.columns(2)
-    start_display = col_start.number_input("Start", 1, total_frames, key="num_start")
-    end_display = col_end.number_input("End", 1, total_frames, key="num_end")
-    st.sidebar.slider("Range", 1, total_frames, value=(start_display, end_display), key="slider_range", on_change=update_sync)
-    
-    actual_start, actual_end = start_display - 1, end_display - 1
+    # Callbacks
+    def update_slider_from_num():
+        s = st.session_state.num_start
+        e = st.session_state.num_end
+        if s > e: s = e 
+        st.session_state.slider_range = (s, e)
+        if s != st.session_state.last_start:
+            st.session_state.preview_frame = s
+        elif e != st.session_state.last_end:
+            st.session_state.preview_frame = e
+        st.session_state.last_start = s
+        st.session_state.last_end = e
 
-    # 3. Crop
-    st.sidebar.subheader("3. Split-Pane Crop")
-    y0 = st.sidebar.slider("Top (%)", 0.0, 1.0, 0.33)
-    y1 = st.sidebar.slider("Bottom (%)", 0.0, 1.0, 0.49)
-    lx0, lx1 = st.sidebar.columns(2)
-    lx_s = lx0.slider("L-Start", 0.0, 1.0, 0.07)
-    lx_e = lx1.slider("L-End", 0.0, 1.0, 0.42)
-    rx0, rx1 = st.sidebar.columns(2)
-    rx_s = rx0.slider("R-Start", 0.0, 1.0, 0.52)
-    rx_e = rx1.slider("R-End", 0.0, 1.0, 0.88)
+    def update_num_from_slider():
+        s, e = st.session_state.slider_range
+        st.session_state.num_start = s
+        st.session_state.num_end = e
+        if s != st.session_state.last_start:
+            st.session_state.preview_frame = s
+        elif e != st.session_state.last_end:
+            st.session_state.preview_frame = e
+        st.session_state.last_start = s
+        st.session_state.last_end = e
 
-    y_start, y_end = int(y0 * H), int(y1 * H)
-    lx_start, lx_end = int(lx_s * W), int(lx_e * W)
-    rx_start, rx_end = int(rx_s * W), int(rx_e * W)
-    crop_h, final_w = (y_end - y_start), (lx_end - lx_start) + (rx_end - rx_start)
+    # Inputs
+    col_start, col_end = st.sidebar.columns(2)
+    with col_start:
+        st.number_input("Start Frame", value=st.session_state.num_start, key="num_start", on_change=update_slider_from_num)
+    with col_end:
+        st.number_input("End Frame", value=st.session_state.num_end, key="num_end", on_change=update_slider_from_num)
 
-    # 4. Format
-    export_format = st.sidebar.radio("Export Format", ["MP4", "GIF"])
+    start_display, end_display = st.sidebar.slider(
+        "Frame Range",
+        min_value=min_display_frame,
+        max_value=max_display_frame,
+        value=st.session_state.slider_range,
+        key="slider_range",
+        step=1,
+        on_change=update_num_from_slider
+    )
+    
+    # Map back to 0-based index for OpenCV internal processing
+    actual_start = clamp(start_display - 1, 0, total_frames - 1)
+    actual_end = clamp(end_display - 1, 0, total_frames - 1)
+    
+    st.sidebar.info(f"Duration: {actual_end - actual_start + 1} frames")
 
-    # 5. Arrange Videos (New Feature)
-    st.sidebar.subheader("5. Multi-Video Grid")
-    ordered_files = st.sidebar.multiselect(
-        "Arrange order for Merged Video:", 
-        options=file_names, 
-        default=file_names,
-        help="The order here determines the sequence in the merged grid."
-    )
-    grid_cols = st.sidebar.number_input("Grid Columns", 1, 10, value=1)
+    # --- 5. Split-Pane Spatial Cropping ---
+    st.sidebar.subheader("3. Split-Pane Crop")
+    
+    st.sidebar.markdown("**Global Height**")
+    c1, c2 = st.sidebar.columns(2)
+    with c1: y0 = st.slider("Top (%)", 0.0, 1.0, 0.33, 0.01)
+    with c2: y1 = st.slider("Bottom (%)", 0.0, 1.0, 0.49, 0.01)
 
-    # --- Preview Logic ---
-    st.subheader(f"Preview: {selected_name}")
-    preview_frame_display = st.slider("Scrub", 1, total_frames, value=st.session_state.preview_frame)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, preview_frame_display - 1)
-    ret, frame_preview = cap.read()
+    st.sidebar.markdown("**Left Image (B-Mode)**")
+    c3, c4 = st.sidebar.columns(2)
+    with c3: lx0 = st.slider("L-Start (%)", 0.0, 1.0, 0.07, 0.01)
+    with c4: lx1 = st.slider("L-End (%)", 0.0, 1.0, 0.42, 0.01)
 
-    if ret:
-        overlay = frame_preview.copy()
-        cv2.rectangle(overlay, (lx_start, y_start), (lx_end, y_end), (0, 255, 0), 2)
-        cv2.rectangle(overlay, (rx_start, y_start), (rx_end, y_end), (0, 255, 0), 2)
-        st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True)
+    st.sidebar.markdown("**Right Image (NLC)**")
+    c5, c6 = st.sidebar.columns(2)
+    with c5: rx0 = st.slider("R-Start (%)", 0.0, 1.0, 0.52, 0.01)
+    with c6: rx1 = st.slider("R-End (%)", 0.0, 1.0, 0.88, 0.01)
 
-    # --- Processing ---
-    st.markdown("---")
-    col_proc1, col_proc2 = st.columns(2)
+    # Convert percentages to pixels
+    y_start = int(clamp(y0, 0, 1) * H)
+    y_end   = int(clamp(y1, 0, 1) * H)
+    lx_start = int(clamp(lx0, 0, 1) * W)
+    lx_end   = int(clamp(lx1, 0, 1) * W)
+    rx_start = int(clamp(rx0, 0, 1) * W)
+    rx_end   = int(clamp(rx1, 0, 1) * W)
 
-    # Button 1: Batch Process
-    if col_proc1.button(f"📦 Process All ({len(uploaded_files)})"):
-        # ... [Keep your existing batch logic here for individual files] ...
-        st.info("Individual files processed. (Logic omitted for brevity, remains unchanged from your snippet)")
+    # Failsafes
+    if y_end <= y_start: y_end = y_start + 1
+    if lx_end <= lx_start: lx_end = lx_start + 1
+    if rx_end <= rx_start: rx_end = rx_start + 1
 
-    # Button 2: Merge into One Video (New Feature)
-    if col_proc2.button("🎬 Create Merged Grid Video"):
-        if not ordered_files:
-            st.error("Please select videos in the sidebar to arrange them.")
-        else:
-            with st.spinner("Stitching videos into grid..."):
-                # Setup temp inputs
-                temp_paths = []
-                caps = []
-                for name in ordered_files:
-                    f = file_map[name]
-                    f.seek(0)
-                    t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(f.name)[1])
-                    t_in.write(f.read())
-                    t_in.close()
-                    temp_paths.append(t_in.name)
-                    caps.append(cv2.VideoCapture(t_in.name))
+    crop_h = y_end - y_start
+    crop_w_left = lx_end - lx_start
+    crop_w_right = rx_end - rx_start
+    final_w = crop_w_left + crop_w_right
 
-                # Calculate Grid dimensions
-                num_vids = len(ordered_files)
-                rows = (num_vids + grid_cols - 1) // grid_cols
-                canvas_w = grid_cols * final_w
-                canvas_h = rows * crop_h
+    # --- 6. Export Format Selection ---
+    st.sidebar.subheader("4. Export Format")
+    export_format = st.sidebar.radio("Choose output format:", ["MP4", "GIF"])
 
-                ext = ".mp4" if export_format == "MP4" else ".gif"
-                t_merged = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-                
-                if export_format == "MP4":
-                    writer = cv2.VideoWriter(t_merged.name, cv2.VideoWriter_fourcc(*'mp4v'), user_fps, (canvas_w, canvas_h))
-                else:
-                    writer = imageio.get_writer(t_merged.name, mode='I', fps=user_fps, loop=0)
+    # --- 7. Interactive Preview ---
+    st.subheader(f"Preview: {selected_name}")
+    
+    if 'preview_frame' not in st.session_state:
+        st.session_state.preview_frame = 1
 
-                for f_idx in range(actual_start, actual_end + 1):
-                    row_images = []
-                    for r in range(rows):
-                        cols_in_row = []
-                        for c in range(grid_cols):
-                            idx = r * grid_cols + c
-                            if idx < num_vids:
-                                caps[idx].set(cv2.CAP_PROP_POS_FRAMES, f_idx)
-                                success, frame = caps[idx].read()
-                                if success:
-                                    c_l = frame[y_start:y_end, lx_start:lx_end]
-                                    c_r = frame[y_start:y_end, rx_start:rx_end]
-                                    stitched = cv2.hconcat([c_l, c_r])
-                                    cols_in_row.append(stitched)
-                                else:
-                                    cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
-                            else:
-                                cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
-                        row_images.append(cv2.hconcat(cols_in_row))
-                    
-                    full_canvas = cv2.vconcat(row_images)
-                    if export_format == "MP4":
-                        writer.write(full_canvas)
-                    else:
-                        writer.append_data(cv2.cvtColor(full_canvas, cv2.COLOR_BGR2RGB))
+    preview_frame_display = st.slider(
+        "Scrub Timeline", 
+        min_value=min_display_frame, 
+        max_value=max_display_frame, 
+        value=st.session_state.preview_frame,
+        step=1,
+        key="preview_slider"
+    )
 
-                if export_format == "MP4": writer.release()
-                else: writer.close()
-                for c in caps: c.release()
-                for p in temp_paths: os.unlink(p)
+    # Convert the 1-based display value to 0-based for OpenCV
+    actual_preview_frame = clamp(preview_frame_display - 1, 0, total_frames - 1)
 
-                with open(t_merged.name, "rb") as f:
-                    st.download_button("⬇️ Download Merged Video", f.read(), f"merged_vevo{ext}")
-    
-    cap.release()
-    try: os.unlink(tfile.name)
-    except: pass
+    cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
+    ret, frame_preview = cap.read()
+
+    if ret:
+        current_time = actual_preview_frame / user_fps
+        overlay = frame_preview.copy()
+        
+        # Draw the two crop boxes on the overlay
+        cv2.rectangle(overlay, (lx_start, y_start), (lx_end, y_end), (0, 255, 0), 2)
+        cv2.rectangle(overlay, (rx_start, y_start), (rx_end, y_end), (0, 255, 0), 2)
+        
+        st.image(
+            cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 
+            use_container_width=True, 
+            caption=f"Frame: {preview_frame_display} | Vevo Time: {current_time:.3f}s"
+        )
+        
+        # Preview Controls
+        col_btn1, col_btn2 = st.columns(2)
+        
+        with col_btn1:
+            if st.button("▶️ Play 1s Clip"):
+                with st.spinner("Rendering preview clip..."):
+                    t_prev = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    preview_writer = cv2.VideoWriter(t_prev.name, fourcc, user_fps, (final_w, crop_h))
+                    frames_to_render = int(user_fps) 
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
+                    
+                    for _ in range(frames_to_render):
+                        ret_p, frame_p = cap.read()
+                        if not ret_p: break
+                        
+                        # Extract both panes and stitch them together
+                        crop_left = frame_p[y_start:y_end, lx_start:lx_end]
+                        crop_right = frame_p[y_start:y_end, rx_start:rx_end]
+                        
+                        if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
+                            stitched_frame = cv2.hconcat([crop_left, crop_right])
+                            preview_writer.write(stitched_frame)
+                            
+                    preview_writer.release()
+                    st.video(t_prev.name)
+                    
+        with col_btn2:
+            # Slice from the original clean frame, not the overlay
+            crop_left_clean = frame_preview[y_start:y_end, lx_start:lx_end]
+            crop_right_clean = frame_preview[y_start:y_end, rx_start:rx_end]
+            
+            if crop_left_clean.shape[0] > 0 and crop_right_clean.shape[0] > 0:
+                stitched_clean = cv2.hconcat([crop_left_clean, crop_right_clean])
+                is_success, buffer = cv2.imencode(".png", stitched_clean)
+                
+                if is_success:
+                    base_name = os.path.splitext(selected_name)[0]
+                    dl_name = f"{base_name}_frame_{preview_frame_display}.png"
+                    
+                    st.download_button(
+                        label="📸 Download Current Frame",
+                        data=buffer.tobytes(),
+                        file_name=dl_name,
+                        mime="image/png"
+                    )
+
+    else:
+        st.warning("Could not read frame.")
+    
+    cap.release()
+    try: os.unlink(tfile.name)
+    except: pass
+
+    st.markdown("---")
+
+    # --- 8. Batch Processing Logic ---
+    if 'processed_zip' not in st.session_state:
+        st.session_state['processed_zip'] = None
+
+    if st.button(f"Process All {len(uploaded_files)} Video(s) as {export_format}"):
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for i, uploaded_file in enumerate(uploaded_files):
+                status_text.text(f"Processing {uploaded_file.name}...")
+                uploaded_file.seek(0)
+                t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1])
+                t_in.write(uploaded_file.read())
+                t_in.flush()
+                t_in.close()
+
+                vcap = cv2.VideoCapture(t_in.name)
+                base_name = os.path.splitext(uploaded_file.name)[0]
+                
+                # Output filename dynamically sets the extension
+                ext = ".mp4" if export_format == "MP4" else ".gif"
+                out_name = f"{base_name}_frames_{start_display}-{end_display}{ext}"
+                
+                t_out = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                t_out_name = t_out.name
+                t_out.close()
+                
+                # Initialize correct writer based on format
+                if export_format == "MP4":
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (final_w, crop_h))
+                else:
+                    # imageio writer for GIFs with loop=0 for infinite looping
+                    writer = imageio.get_writer(t_out_name, mode='I', fps=user_fps, loop=0)
+                
+                current_frame = 0
+                while True:
+                    ok, frame = vcap.read()
+                    if not ok: break
+                    if actual_start <= current_frame <= actual_end:
+                        # Ensure frame bounds are valid before slicing
+                        if frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
+                            crop_left = frame[y_start:y_end, lx_start:lx_end]
+                            crop_right = frame[y_start:y_end, rx_start:rx_end]
+                            
+                            if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
+                                stitched_frame = cv2.hconcat([crop_left, crop_right])
+                                
+                                if export_format == "MP4":
+                                    writer.write(stitched_frame)
+                                else:
+                                    # imageio requires RGB format, OpenCV uses BGR natively
+                                    rgb_frame = cv2.cvtColor(stitched_frame, cv2.COLOR_BGR2RGB)
+                                    writer.append_data(rgb_frame)
+                                
+                    current_frame += 1
+                    if current_frame > actual_end: break
+                
+                vcap.release()
+                
+                # Release correct writer
+                if export_format == "MP4":
+                    writer.release()
+                else:
+                    writer.close()
+                    
+                try: os.unlink(t_in.name)
+                except: pass
+                zipf.write(t_out_name, arcname=out_name)
+                try: os.unlink(t_out_name)
+                except: pass
+                progress_bar.progress((i + 1) / len(uploaded_files))
+
+        status_text.success("✅ Processing Complete!")
+        zip_buffer.seek(0)
+        st.session_state['processed_zip'] = zip_buffer.getvalue()
+
+    if st.session_state['processed_zip'] is not None:
+        st.download_button(
+            label="⬇️ Download All Processed Videos (ZIP)",
+            data=st.session_state['processed_zip'],
+            file_name="vevo_processed_videos.zip",
+            mime="application/zip"
+        )
