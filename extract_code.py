@@ -17,7 +17,7 @@ st.markdown("""
 2. **Select Video**: Choose which video to preview.
 3. **Trim**: Set your start/end points.
 4. **Split-Pane Crop**: Box out the B-mode and NLC panes. The app will stitch them together.
-5. **Format**: Choose MP4 or GIF for your final downloaded files.
+5. **Format & Order**: Set your export settings and arrange your videos in the sidebar.
 6. **Process**: Generate a ZIP of individual files, OR a single merged Grid GIF.
 """)
 
@@ -33,9 +33,11 @@ def clamp(val, lo, hi):
 
 if uploaded_files:
     
-    # --- 1. Video Selector ---
+    # --- 1. Video Selector & Mapping ---
     file_map = {f.name: f for f in uploaded_files}
-    selected_name = st.selectbox("Select Video to Preview/Setup", list(file_map.keys()))
+    file_names = list(file_map.keys())
+    
+    selected_name = st.selectbox("Select Video to Preview/Setup", file_names)
     selected_file = file_map[selected_name]
 
     # --- 2. Read Metadata ---
@@ -76,13 +78,11 @@ if uploaded_files:
     # --- 4. Synchronized Frame Trimming (1-Based Indexing) ---
     st.sidebar.subheader("2. Trim Video")
     
-    # UI Display bounds starting at 1
     max_display_frame = total_frames
     min_display_frame = 1
     
     st.sidebar.caption(f"Total Frames: {total_frames}")
 
-    # Initialize State with 1-based indexing
     if 'current_video_name' not in st.session_state or st.session_state.current_video_name != selected_name:
         st.session_state.current_video_name = selected_name
         st.session_state.num_start = 1
@@ -92,7 +92,6 @@ if uploaded_files:
         st.session_state.last_start = 1
         st.session_state.last_end = total_frames
 
-    # Callbacks
     def update_slider_from_num():
         s = st.session_state.num_start
         e = st.session_state.num_end
@@ -116,7 +115,6 @@ if uploaded_files:
         st.session_state.last_start = s
         st.session_state.last_end = e
 
-    # Inputs
     col_start, col_end = st.sidebar.columns(2)
     with col_start:
         st.number_input("Start Frame", value=st.session_state.num_start, key="num_start", on_change=update_slider_from_num)
@@ -133,7 +131,6 @@ if uploaded_files:
         on_change=update_num_from_slider
     )
     
-    # Map back to 0-based index for OpenCV internal processing
     actual_start = clamp(start_display - 1, 0, total_frames - 1)
     actual_end = clamp(end_display - 1, 0, total_frames - 1)
     
@@ -157,7 +154,6 @@ if uploaded_files:
     with c5: rx0 = st.slider("R-Start (%)", 0.0, 1.0, 0.52, 0.01)
     with c6: rx1 = st.slider("R-End (%)", 0.0, 1.0, 0.88, 0.01)
 
-    # Convert percentages to pixels
     y_start = int(clamp(y0, 0, 1) * H)
     y_end   = int(clamp(y1, 0, 1) * H)
     lx_start = int(clamp(lx0, 0, 1) * W)
@@ -165,7 +161,6 @@ if uploaded_files:
     rx_start = int(clamp(rx0, 0, 1) * W)
     rx_end   = int(clamp(rx1, 0, 1) * W)
 
-    # Failsafes
     if y_end <= y_start: y_end = y_start + 1
     if lx_end <= lx_start: lx_end = lx_start + 1
     if rx_end <= rx_start: rx_end = rx_start + 1
@@ -175,12 +170,18 @@ if uploaded_files:
     crop_w_right = rx_end - rx_start
     final_w = crop_w_left + crop_w_right
 
-    # --- 6. Export Format Selection ---
+    # --- 6. Export Format Selection & Grid Ordering ---
     st.sidebar.subheader("4. Export Options")
     export_format = st.sidebar.radio("Choose format for individual ZIP export:", ["MP4", "GIF"])
     
-    st.sidebar.markdown("**Grid Options (For Merged Export)**")
-    grid_cols = st.sidebar.number_input("Grid Columns", min_value=1, max_value=10, value=2)
+    st.sidebar.markdown("**Grid & Ordering (For Merged Export)**")
+    ordered_files = st.sidebar.multiselect(
+        "Arrange video sequence (Top to Bottom):",
+        options=file_names,
+        default=file_names,
+        help="Click the 'X' to remove a video, or click the empty space to add it back in the order you want."
+    )
+    grid_cols = st.sidebar.number_input("Grid Columns (Set to 1 for vertical stack)", min_value=1, max_value=10, value=1)
 
     # --- 7. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
@@ -197,9 +198,7 @@ if uploaded_files:
         key="preview_slider"
     )
 
-    # Convert the 1-based display value to 0-based for OpenCV
     actual_preview_frame = clamp(preview_frame_display - 1, 0, total_frames - 1)
-
     cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
     ret, frame_preview = cap.read()
 
@@ -207,7 +206,6 @@ if uploaded_files:
         current_time = actual_preview_frame / user_fps
         overlay = frame_preview.copy()
         
-        # Draw the two crop boxes on the overlay
         cv2.rectangle(overlay, (lx_start, y_start), (lx_end, y_end), (0, 255, 0), 2)
         cv2.rectangle(overlay, (rx_start, y_start), (rx_end, y_end), (0, 255, 0), 2)
         
@@ -217,7 +215,6 @@ if uploaded_files:
             caption=f"Frame: {preview_frame_display} | Vevo Time: {current_time:.3f}s"
         )
         
-        # Preview Controls
         col_btn1, col_btn2 = st.columns(2)
         
         with col_btn1:
@@ -233,7 +230,6 @@ if uploaded_files:
                         ret_p, frame_p = cap.read()
                         if not ret_p: break
                         
-                        # Extract both panes and stitch them together
                         crop_left = frame_p[y_start:y_end, lx_start:lx_end]
                         crop_right = frame_p[y_start:y_end, rx_start:rx_end]
                         
@@ -245,7 +241,6 @@ if uploaded_files:
                     st.video(t_prev.name)
                     
         with col_btn2:
-            # Slice from the original clean frame, not the overlay
             crop_left_clean = frame_preview[y_start:y_end, lx_start:lx_end]
             crop_right_clean = frame_preview[y_start:y_end, rx_start:rx_end]
             
@@ -263,7 +258,6 @@ if uploaded_files:
                         file_name=dl_name,
                         mime="image/png"
                     )
-
     else:
         st.warning("Could not read frame.")
     
@@ -297,6 +291,8 @@ if uploaded_files:
                     t_in.close()
 
                     vcap = cv2.VideoCapture(t_in.name)
+                    # FAST SEEK
+                    vcap.set(cv2.CAP_PROP_POS_FRAMES, actual_start)
                     base_name = os.path.splitext(uploaded_file.name)[0]
                     
                     ext = ".mp4" if export_format == "MP4" else ".gif"
@@ -312,33 +308,27 @@ if uploaded_files:
                     else:
                         writer = imageio.get_writer(t_out_name, mode='I', fps=user_fps, loop=0)
                     
-                    current_frame = 0
-                    while True:
+                    for _ in range(actual_start, actual_end + 1):
                         ok, frame = vcap.read()
                         if not ok: break
-                        if actual_start <= current_frame <= actual_end:
-                            if frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
-                                crop_left = frame[y_start:y_end, lx_start:lx_end]
-                                crop_right = frame[y_start:y_end, rx_start:rx_end]
+                        
+                        if frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
+                            crop_left = frame[y_start:y_end, lx_start:lx_end]
+                            crop_right = frame[y_start:y_end, rx_start:rx_end]
+                            
+                            if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
+                                stitched_frame = cv2.hconcat([crop_left, crop_right])
                                 
-                                if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
-                                    stitched_frame = cv2.hconcat([crop_left, crop_right])
-                                    
-                                    if export_format == "MP4":
-                                        writer.write(stitched_frame)
-                                    else:
-                                        rgb_frame = cv2.cvtColor(stitched_frame, cv2.COLOR_BGR2RGB)
-                                        writer.append_data(rgb_frame)
-                                        
-                        current_frame += 1
-                        if current_frame > actual_end: break
+                                if export_format == "MP4":
+                                    writer.write(stitched_frame)
+                                else:
+                                    rgb_frame = cv2.cvtColor(stitched_frame, cv2.COLOR_BGR2RGB)
+                                    writer.append_data(rgb_frame)
                     
                     vcap.release()
                     
-                    if export_format == "MP4":
-                        writer.release()
-                    else:
-                        writer.close()
+                    if export_format == "MP4": writer.release()
+                    else: writer.close()
                         
                     try: os.unlink(t_in.name)
                     except: pass
@@ -351,91 +341,82 @@ if uploaded_files:
             zip_buffer.seek(0)
             st.session_state['processed_zip'] = zip_buffer.getvalue()
 
-# --- OPTION B: Merged Grid Logic ---
+    # --- OPTION B: Merged Grid Logic ---
     if 'merged_grid_gif' not in st.session_state:
         st.session_state['merged_grid_gif'] = None
 
     with col_process_grid:
-        if st.button(f"🎬 Export Overlapped Grid\n(All {len(uploaded_files)} on 1 .gif screen)"):
-            with st.spinner("Stitching videos into single grid GIF..."):
-                # Prepare temporary files and VideoCaptures
-                temp_paths = []
-                caps = []
-                for uf in uploaded_files:
-                    uf.seek(0)
-                    t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uf.name)[1])
-                    t_in.write(uf.read())
-                    t_in.close()
-                    temp_paths.append(t_in.name)
+        if st.button(f"🎬 Export Overlapped Grid\n(Stack ordered files on 1 .gif screen)"):
+            if not ordered_files:
+                st.error("Please select at least one video in the Grid Options.")
+            else:
+                with st.spinner("Stitching videos into single grid GIF..."):
+                    temp_paths = []
+                    caps = []
                     
-                    cap_obj = cv2.VideoCapture(t_in.name)
-                    # FAST SEEK: Jump to the starting frame ONCE before the loop begins
-                    cap_obj.set(cv2.CAP_PROP_POS_FRAMES, actual_start)
-                    caps.append(cap_obj)
+                    for fname in ordered_files:
+                        uf = file_map[fname]
+                        uf.seek(0)
+                        t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uf.name)[1])
+                        t_in.write(uf.read())
+                        t_in.close()
+                        temp_paths.append(t_in.name)
+                        
+                        cap_obj = cv2.VideoCapture(t_in.name)
+                        cap_obj.set(cv2.CAP_PROP_POS_FRAMES, actual_start)
+                        caps.append(cap_obj)
 
-                # Calculate grid dimensions
-                num_vids = len(caps)
-                rows = (num_vids + grid_cols - 1) // grid_cols
-                
-                t_grid_out = tempfile.NamedTemporaryFile(delete=False, suffix=".gif")
-                grid_writer = imageio.get_writer(t_grid_out.name, mode='I', fps=user_fps, loop=0)
+                    num_vids = len(caps)
+                    rows = (num_vids + grid_cols - 1) // grid_cols
+                    
+                    t_grid_out = tempfile.NamedTemporaryFile(delete=False, suffix=".gif")
+                    grid_writer = imageio.get_writer(t_grid_out.name, mode='I', fps=user_fps, loop=0)
 
-                # Add a progress bar to prevent the app from looking frozen
-                progress_bar_grid = st.progress(0.0)
-                total_frames_to_process = actual_end - actual_start + 1
+                    progress_bar_grid = st.progress(0.0)
+                    total_frames_to_process = actual_end - actual_start + 1
 
-                # Process all videos simultaneously frame-by-frame
-                for step, f_idx in enumerate(range(actual_start, actual_end + 1)):
-                    row_images = []
-                    for r in range(rows):
-                        cols_in_row = []
-                        for c in range(grid_cols):
-                            idx = r * grid_cols + c
-                            if idx < num_vids:
-                                # FAST READ: Sequentially read the next frame
-                                ok, frame = caps[idx].read()
-                                if ok and frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
-                                    cl = frame[y_start:y_end, lx_start:lx_end]
-                                    cr = frame[y_start:y_end, rx_start:rx_end]
-                                    if cl.shape[0] > 0 and cr.shape[0] > 0:
-                                        stitched = cv2.hconcat([cl, cr])
-                                        cols_in_row.append(stitched)
+                    for step, f_idx in enumerate(range(actual_start, actual_end + 1)):
+                        row_images = []
+                        for r in range(rows):
+                            cols_in_row = []
+                            for c in range(grid_cols):
+                                idx = r * grid_cols + c
+                                if idx < num_vids:
+                                    ok, frame = caps[idx].read()
+                                    if ok and frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
+                                        cl = frame[y_start:y_end, lx_start:lx_end]
+                                        cr = frame[y_start:y_end, rx_start:rx_end]
+                                        if cl.shape[0] > 0 and cr.shape[0] > 0:
+                                            stitched = cv2.hconcat([cl, cr])
+                                            cols_in_row.append(stitched)
+                                        else:
+                                            cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
                                     else:
                                         cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
                                 else:
                                     cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
-                            else:
-                                # Append blank frame to fill uneven grid spaces
-                                cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
+                            
+                            row_images.append(cv2.hconcat(cols_in_row))
                         
-                        # Concatenate row horizontally
-                        row_images.append(cv2.hconcat(cols_in_row))
-                    
-                    # Concatenate all rows vertically
-                    full_grid_frame = cv2.vconcat(row_images)
-                    
-                    # Convert BGR to RGB for ImageIO
-                    rgb_grid_frame = cv2.cvtColor(full_grid_frame, cv2.COLOR_BGR2RGB)
-                    grid_writer.append_data(rgb_grid_frame)
-                    
-                    # Update the progress bar
-                    progress_bar_grid.progress((step + 1) / total_frames_to_process)
+                        full_grid_frame = cv2.vconcat(row_images)
+                        rgb_grid_frame = cv2.cvtColor(full_grid_frame, cv2.COLOR_BGR2RGB)
+                        grid_writer.append_data(rgb_grid_frame)
+                        
+                        progress_bar_grid.progress((step + 1) / total_frames_to_process)
 
-                # Clean up captures and writer
-                grid_writer.close()
-                for cap_obj in caps:
-                    cap_obj.release()
-                for p in temp_paths:
-                    try: os.unlink(p)
+                    grid_writer.close()
+                    for cap_obj in caps: cap_obj.release()
+                    for p in temp_paths:
+                        try: os.unlink(p)
+                        except: pass
+
+                    with open(t_grid_out.name, "rb") as f:
+                        st.session_state['merged_grid_gif'] = f.read()
+                    try: os.unlink(t_grid_out.name)
                     except: pass
 
-                # Read final file to memory and set to session state
-                with open(t_grid_out.name, "rb") as f:
-                    st.session_state['merged_grid_gif'] = f.read()
-                try: os.unlink(t_grid_out.name)
-                except: pass
+                    st.success("✅ Overlapped Grid Complete!")
 
-                st.success("✅ Overlapped Grid Complete!")
     # --- Render Download Buttons ---
     st.markdown("---")
     col_dl1, col_dl2 = st.columns(2)
