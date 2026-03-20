@@ -143,12 +143,12 @@ if uploaded_files:
     
     st.sidebar.markdown("**Global Height**")
     c1, c2 = st.sidebar.columns(2)
-    with c1: y0 = st.slider("Top (%)", 0.0, 1.0, 0.35, 0.01)
-    with c2: y1 = st.slider("Bottom (%)", 0.0, 1.0, 0.48, 0.01)
+    with c1: y0 = st.slider("Top (%)", 0.0, 1.0, 0.33, 0.01)
+    with c2: y1 = st.slider("Bottom (%)", 0.0, 1.0, 0.49, 0.01)
 
     st.sidebar.markdown("**Left Image (B-Mode)**")
     c3, c4 = st.sidebar.columns(2)
-    with c3: lx0 = st.slider("L-Start (%)", 0.0, 1.0, 0.08, 0.01)
+    with c3: lx0 = st.slider("L-Start (%)", 0.0, 1.0, 0.07, 0.01)
     with c4: lx1 = st.slider("L-End (%)", 0.0, 1.0, 0.42, 0.01)
 
     st.sidebar.markdown("**Right Image (NLC)**")
