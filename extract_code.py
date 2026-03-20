@@ -351,14 +351,14 @@ if uploaded_files:
             zip_buffer.seek(0)
             st.session_state['processed_zip'] = zip_buffer.getvalue()
 
-    # --- OPTION B: Merged Grid Logic ---
+# --- OPTION B: Merged Grid Logic ---
     if 'merged_grid_gif' not in st.session_state:
         st.session_state['merged_grid_gif'] = None
 
     with col_process_grid:
         if st.button(f"🎬 Export Overlapped Grid\n(All {len(uploaded_files)} on 1 .gif screen)"):
             with st.spinner("Stitching videos into single grid GIF..."):
-                # Prepare temporary files and VideoCaptures for all uploaded videos
+                # Prepare temporary files and VideoCaptures
                 temp_paths = []
                 caps = []
                 for uf in uploaded_files:
@@ -367,7 +367,11 @@ if uploaded_files:
                     t_in.write(uf.read())
                     t_in.close()
                     temp_paths.append(t_in.name)
-                    caps.append(cv2.VideoCapture(t_in.name))
+                    
+                    cap_obj = cv2.VideoCapture(t_in.name)
+                    # FAST SEEK: Jump to the starting frame ONCE before the loop begins
+                    cap_obj.set(cv2.CAP_PROP_POS_FRAMES, actual_start)
+                    caps.append(cap_obj)
 
                 # Calculate grid dimensions
                 num_vids = len(caps)
@@ -376,15 +380,19 @@ if uploaded_files:
                 t_grid_out = tempfile.NamedTemporaryFile(delete=False, suffix=".gif")
                 grid_writer = imageio.get_writer(t_grid_out.name, mode='I', fps=user_fps, loop=0)
 
+                # Add a progress bar to prevent the app from looking frozen
+                progress_bar_grid = st.progress(0.0)
+                total_frames_to_process = actual_end - actual_start + 1
+
                 # Process all videos simultaneously frame-by-frame
-                for f_idx in range(actual_start, actual_end + 1):
+                for step, f_idx in enumerate(range(actual_start, actual_end + 1)):
                     row_images = []
                     for r in range(rows):
                         cols_in_row = []
                         for c in range(grid_cols):
                             idx = r * grid_cols + c
                             if idx < num_vids:
-                                caps[idx].set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+                                # FAST READ: Sequentially read the next frame
                                 ok, frame = caps[idx].read()
                                 if ok and frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
                                     cl = frame[y_start:y_end, lx_start:lx_end]
@@ -409,6 +417,9 @@ if uploaded_files:
                     # Convert BGR to RGB for ImageIO
                     rgb_grid_frame = cv2.cvtColor(full_grid_frame, cv2.COLOR_BGR2RGB)
                     grid_writer.append_data(rgb_grid_frame)
+                    
+                    # Update the progress bar
+                    progress_bar_grid.progress((step + 1) / total_frames_to_process)
 
                 # Clean up captures and writer
                 grid_writer.close()
@@ -425,7 +436,6 @@ if uploaded_files:
                 except: pass
 
                 st.success("✅ Overlapped Grid Complete!")
-
     # --- Render Download Buttons ---
     st.markdown("---")
     col_dl1, col_dl2 = st.columns(2)
