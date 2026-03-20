@@ -5,6 +5,7 @@ import os
 import zipfile
 import io
 import imageio
+import numpy as np
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Vevo 2100 Frame Editor", layout="centered")
@@ -17,7 +18,7 @@ st.markdown("""
 3. **Trim**: Set your start/end points.
 4. **Split-Pane Crop**: Box out the B-mode and NLC panes. The app will stitch them together.
 5. **Format**: Choose MP4 or GIF for your final downloaded files.
-6. **Process**: Generates the cropped/trimmed files.
+6. **Process**: Generate a ZIP of individual files, OR a single merged Grid GIF.
 """)
 
 # --- File Uploader ---
@@ -175,8 +176,11 @@ if uploaded_files:
     final_w = crop_w_left + crop_w_right
 
     # --- 6. Export Format Selection ---
-    st.sidebar.subheader("4. Export Format")
-    export_format = st.sidebar.radio("Choose output format:", ["MP4", "GIF"])
+    st.sidebar.subheader("4. Export Options")
+    export_format = st.sidebar.radio("Choose format for individual ZIP export:", ["MP4", "GIF"])
+    
+    st.sidebar.markdown("**Grid Options (For Merged Export)**")
+    grid_cols = st.sidebar.number_input("Grid Columns", min_value=1, max_value=10, value=2)
 
     # --- 7. Interactive Preview ---
     st.subheader(f"Preview: {selected_name}")
@@ -269,89 +273,177 @@ if uploaded_files:
 
     st.markdown("---")
 
-    # --- 8. Batch Processing Logic ---
+    # --- 8. Processing Section ---
+    st.subheader("Batch Processing Options")
+    col_process_zip, col_process_grid = st.columns(2)
+
+    # --- OPTION A: Original ZIP Logic ---
     if 'processed_zip' not in st.session_state:
         st.session_state['processed_zip'] = None
 
-    if st.button(f"Process All {len(uploaded_files)} Video(s) as {export_format}"):
-        progress_bar = st.progress(0.0)
-        status_text = st.empty()
-        zip_buffer = io.BytesIO()
-        
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for i, uploaded_file in enumerate(uploaded_files):
-                status_text.text(f"Processing {uploaded_file.name}...")
-                uploaded_file.seek(0)
-                t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1])
-                t_in.write(uploaded_file.read())
-                t_in.flush()
-                t_in.close()
+    with col_process_zip:
+        if st.button(f"📦 Export to ZIP\n({len(uploaded_files)} videos as {export_format})"):
+            progress_bar = st.progress(0.0)
+            status_text = st.empty()
+            zip_buffer = io.BytesIO()
+            
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for i, uploaded_file in enumerate(uploaded_files):
+                    status_text.text(f"Zipping {uploaded_file.name}...")
+                    uploaded_file.seek(0)
+                    t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1])
+                    t_in.write(uploaded_file.read())
+                    t_in.flush()
+                    t_in.close()
 
-                vcap = cv2.VideoCapture(t_in.name)
-                base_name = os.path.splitext(uploaded_file.name)[0]
-                
-                # Output filename dynamically sets the extension
-                ext = ".mp4" if export_format == "MP4" else ".gif"
-                out_name = f"{base_name}_frames_{start_display}-{end_display}{ext}"
-                
-                t_out = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-                t_out_name = t_out.name
-                t_out.close()
-                
-                # Initialize correct writer based on format
-                if export_format == "MP4":
-                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (final_w, crop_h))
-                else:
-                    # imageio writer for GIFs with loop=0 for infinite looping
-                    writer = imageio.get_writer(t_out_name, mode='I', fps=user_fps, loop=0)
-                
-                current_frame = 0
-                while True:
-                    ok, frame = vcap.read()
-                    if not ok: break
-                    if actual_start <= current_frame <= actual_end:
-                        # Ensure frame bounds are valid before slicing
-                        if frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
-                            crop_left = frame[y_start:y_end, lx_start:lx_end]
-                            crop_right = frame[y_start:y_end, rx_start:rx_end]
-                            
-                            if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
-                                stitched_frame = cv2.hconcat([crop_left, crop_right])
-                                
-                                if export_format == "MP4":
-                                    writer.write(stitched_frame)
-                                else:
-                                    # imageio requires RGB format, OpenCV uses BGR natively
-                                    rgb_frame = cv2.cvtColor(stitched_frame, cv2.COLOR_BGR2RGB)
-                                    writer.append_data(rgb_frame)
-                                
-                    current_frame += 1
-                    if current_frame > actual_end: break
-                
-                vcap.release()
-                
-                # Release correct writer
-                if export_format == "MP4":
-                    writer.release()
-                else:
-                    writer.close()
+                    vcap = cv2.VideoCapture(t_in.name)
+                    base_name = os.path.splitext(uploaded_file.name)[0]
                     
-                try: os.unlink(t_in.name)
-                except: pass
-                zipf.write(t_out_name, arcname=out_name)
-                try: os.unlink(t_out_name)
-                except: pass
-                progress_bar.progress((i + 1) / len(uploaded_files))
+                    ext = ".mp4" if export_format == "MP4" else ".gif"
+                    out_name = f"{base_name}_frames_{start_display}-{end_display}{ext}"
+                    
+                    t_out = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                    t_out_name = t_out.name
+                    t_out.close()
+                    
+                    if export_format == "MP4":
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        writer = cv2.VideoWriter(t_out_name, fourcc, user_fps, (final_w, crop_h))
+                    else:
+                        writer = imageio.get_writer(t_out_name, mode='I', fps=user_fps, loop=0)
+                    
+                    current_frame = 0
+                    while True:
+                        ok, frame = vcap.read()
+                        if not ok: break
+                        if actual_start <= current_frame <= actual_end:
+                            if frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
+                                crop_left = frame[y_start:y_end, lx_start:lx_end]
+                                crop_right = frame[y_start:y_end, rx_start:rx_end]
+                                
+                                if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
+                                    stitched_frame = cv2.hconcat([crop_left, crop_right])
+                                    
+                                    if export_format == "MP4":
+                                        writer.write(stitched_frame)
+                                    else:
+                                        rgb_frame = cv2.cvtColor(stitched_frame, cv2.COLOR_BGR2RGB)
+                                        writer.append_data(rgb_frame)
+                                        
+                        current_frame += 1
+                        if current_frame > actual_end: break
+                    
+                    vcap.release()
+                    
+                    if export_format == "MP4":
+                        writer.release()
+                    else:
+                        writer.close()
+                        
+                    try: os.unlink(t_in.name)
+                    except: pass
+                    zipf.write(t_out_name, arcname=out_name)
+                    try: os.unlink(t_out_name)
+                    except: pass
+                    progress_bar.progress((i + 1) / len(uploaded_files))
 
-        status_text.success("✅ Processing Complete!")
-        zip_buffer.seek(0)
-        st.session_state['processed_zip'] = zip_buffer.getvalue()
+            status_text.success("✅ ZIP Complete!")
+            zip_buffer.seek(0)
+            st.session_state['processed_zip'] = zip_buffer.getvalue()
 
-    if st.session_state['processed_zip'] is not None:
-        st.download_button(
-            label="⬇️ Download All Processed Videos (ZIP)",
-            data=st.session_state['processed_zip'],
-            file_name="vevo_processed_videos.zip",
-            mime="application/zip"
-        )
+    # --- OPTION B: Merged Grid Logic ---
+    if 'merged_grid_gif' not in st.session_state:
+        st.session_state['merged_grid_gif'] = None
+
+    with col_process_grid:
+        if st.button(f"🎬 Export Overlapped Grid\n(All {len(uploaded_files)} on 1 .gif screen)"):
+            with st.spinner("Stitching videos into single grid GIF..."):
+                # Prepare temporary files and VideoCaptures for all uploaded videos
+                temp_paths = []
+                caps = []
+                for uf in uploaded_files:
+                    uf.seek(0)
+                    t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uf.name)[1])
+                    t_in.write(uf.read())
+                    t_in.close()
+                    temp_paths.append(t_in.name)
+                    caps.append(cv2.VideoCapture(t_in.name))
+
+                # Calculate grid dimensions
+                num_vids = len(caps)
+                rows = (num_vids + grid_cols - 1) // grid_cols
+                
+                t_grid_out = tempfile.NamedTemporaryFile(delete=False, suffix=".gif")
+                grid_writer = imageio.get_writer(t_grid_out.name, mode='I', fps=user_fps, loop=0)
+
+                # Process all videos simultaneously frame-by-frame
+                for f_idx in range(actual_start, actual_end + 1):
+                    row_images = []
+                    for r in range(rows):
+                        cols_in_row = []
+                        for c in range(grid_cols):
+                            idx = r * grid_cols + c
+                            if idx < num_vids:
+                                caps[idx].set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+                                ok, frame = caps[idx].read()
+                                if ok and frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
+                                    cl = frame[y_start:y_end, lx_start:lx_end]
+                                    cr = frame[y_start:y_end, rx_start:rx_end]
+                                    if cl.shape[0] > 0 and cr.shape[0] > 0:
+                                        stitched = cv2.hconcat([cl, cr])
+                                        cols_in_row.append(stitched)
+                                    else:
+                                        cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
+                                else:
+                                    cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
+                            else:
+                                # Append blank frame to fill uneven grid spaces
+                                cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
+                        
+                        # Concatenate row horizontally
+                        row_images.append(cv2.hconcat(cols_in_row))
+                    
+                    # Concatenate all rows vertically
+                    full_grid_frame = cv2.vconcat(row_images)
+                    
+                    # Convert BGR to RGB for ImageIO
+                    rgb_grid_frame = cv2.cvtColor(full_grid_frame, cv2.COLOR_BGR2RGB)
+                    grid_writer.append_data(rgb_grid_frame)
+
+                # Clean up captures and writer
+                grid_writer.close()
+                for cap_obj in caps:
+                    cap_obj.release()
+                for p in temp_paths:
+                    try: os.unlink(p)
+                    except: pass
+
+                # Read final file to memory and set to session state
+                with open(t_grid_out.name, "rb") as f:
+                    st.session_state['merged_grid_gif'] = f.read()
+                try: os.unlink(t_grid_out.name)
+                except: pass
+
+                st.success("✅ Overlapped Grid Complete!")
+
+    # --- Render Download Buttons ---
+    st.markdown("---")
+    col_dl1, col_dl2 = st.columns(2)
+    
+    with col_dl1:
+        if st.session_state['processed_zip'] is not None:
+            st.download_button(
+                label="⬇️ Download ZIP",
+                data=st.session_state['processed_zip'],
+                file_name="vevo_processed_videos.zip",
+                mime="application/zip"
+            )
+
+    with col_dl2:
+        if st.session_state['merged_grid_gif'] is not None:
+            st.download_button(
+                label="⬇️ Download Overlapped Grid (.gif)",
+                data=st.session_state['merged_grid_gif'],
+                file_name="vevo_merged_grid.gif",
+                mime="image/gif"
+            )
