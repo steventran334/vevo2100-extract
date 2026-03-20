@@ -153,7 +153,7 @@ if uploaded_files:
 
     st.sidebar.markdown("**Right Image (NLC)**")
     c5, c6 = st.sidebar.columns(2)
-    with c5: rx0 = st.slider("R-Start (%)", 0.0, 1.0, 0.54, 0.01)
+    with c5: rx0 = st.slider("R-Start (%)", 0.0, 1.0, 0.52, 0.01)
     with c6: rx1 = st.slider("R-End (%)", 0.0, 1.0, 0.88, 0.01)
 
     # Convert percentages to pixels
