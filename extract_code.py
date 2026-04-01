@@ -33,20 +33,37 @@ def clamp(val, lo, hi):
 
 if uploaded_files:
     
+    # --- 0. Optimize: Cache Temp Files in Session State ---
+    if 'temp_video_paths' not in st.session_state:
+        st.session_state.temp_video_paths = {}
+
+    current_file_names = [f.name for f in uploaded_files]
+
+    # Cleanup removed files from cache
+    for name in list(st.session_state.temp_video_paths.keys()):
+        if name not in current_file_names:
+            try: os.unlink(st.session_state.temp_video_paths[name])
+            except: pass
+            del st.session_state.temp_video_paths[name]
+
+    # Create temp files for newly uploaded files only
+    for f in uploaded_files:
+        if f.name not in st.session_state.temp_video_paths:
+            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(f.name)[1])
+            f.seek(0)
+            tfile.write(f.read())
+            tfile.close()
+            st.session_state.temp_video_paths[f.name] = tfile.name
+
     # --- 1. Video Selector & Mapping ---
     file_map = {f.name: f for f in uploaded_files}
     file_names = list(file_map.keys())
     
     selected_name = st.selectbox("Select Video to Preview/Setup", file_names)
-    selected_file = file_map[selected_name]
+    selected_video_path = st.session_state.temp_video_paths[selected_name]
 
     # --- 2. Read Metadata ---
-    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(selected_file.name)[1])
-    selected_file.seek(0)
-    tfile.write(selected_file.read())
-    tfile.flush()
-    
-    cap = cv2.VideoCapture(tfile.name)
+    cap = cv2.VideoCapture(selected_video_path)
     
     if not cap.isOpened():
         st.error("Error opening video file.")
@@ -189,16 +206,38 @@ if uploaded_files:
     if 'preview_frame' not in st.session_state:
         st.session_state.preview_frame = 1
 
-    preview_frame_display = st.slider(
-        "Scrub Timeline", 
-        min_value=min_display_frame, 
-        max_value=max_display_frame, 
-        value=st.session_state.preview_frame,
-        step=1,
-        key="preview_slider"
-    )
+    # Callback functions to sync the slider and the number input
+    def update_preview_from_slider():
+        st.session_state.preview_frame = st.session_state.preview_slider_ui
+    def update_preview_from_num():
+        st.session_state.preview_frame = st.session_state.preview_num_ui
 
+    col_scrub1, col_scrub2 = st.columns([3, 1])
+    with col_scrub1:
+        st.slider(
+            "Scrub Timeline", 
+            min_value=min_display_frame, 
+            max_value=max_display_frame, 
+            value=st.session_state.preview_frame,
+            step=1,
+            key="preview_slider_ui",
+            on_change=update_preview_from_slider
+        )
+    with col_scrub2:
+        st.number_input(
+            "Go to Frame",
+            min_value=min_display_frame, 
+            max_value=max_display_frame, 
+            value=st.session_state.preview_frame,
+            step=1,
+            key="preview_num_ui",
+            on_change=update_preview_from_num
+        )
+
+    preview_frame_display = st.session_state.preview_frame
     actual_preview_frame = clamp(preview_frame_display - 1, 0, total_frames - 1)
+    
+    # Read frame for the single selected video
     cap.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
     ret, frame_preview = cap.read()
 
@@ -258,12 +297,62 @@ if uploaded_files:
                         file_name=dl_name,
                         mime="image/png"
                     )
+
+        # --- NEW: Grid Preview of Current Frame ---
+        st.markdown("### Grid Preview at Current Frame")
+        if ordered_files:
+            caps_grid = []
+            # Open VideoCaptures for all ordered videos
+            for fname in ordered_files:
+                path = st.session_state.temp_video_paths[fname]
+                cap_obj = cv2.VideoCapture(path)
+                cap_obj.set(cv2.CAP_PROP_POS_FRAMES, actual_preview_frame)
+                caps_grid.append(cap_obj)
+
+            num_vids = len(caps_grid)
+            rows = (num_vids + grid_cols - 1) // grid_cols
+            row_images = []
+            
+            # Stitch the grid for this specific frame
+            for r in range(rows):
+                cols_in_row = []
+                for c in range(grid_cols):
+                    idx = r * grid_cols + c
+                    if idx < num_vids:
+                        ok, frame = caps_grid[idx].read()
+                        if ok and frame.shape[0] >= y_end and frame.shape[1] >= max(lx_end, rx_end):
+                            cl = frame[y_start:y_end, lx_start:lx_end]
+                            cr = frame[y_start:y_end, rx_start:rx_end]
+                            if cl.shape[0] > 0 and cr.shape[0] > 0:
+                                stitched = cv2.hconcat([cl, cr])
+                                cols_in_row.append(stitched)
+                            else:
+                                cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
+                        else:
+                            cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
+                    else:
+                        cols_in_row.append(np.zeros((crop_h, final_w, 3), dtype=np.uint8))
+                
+                row_images.append(cv2.hconcat(cols_in_row))
+            
+            if row_images:
+                full_grid_frame = cv2.vconcat(row_images)
+                st.image(
+                    cv2.cvtColor(full_grid_frame, cv2.COLOR_BGR2RGB), 
+                    use_container_width=True, 
+                    caption=f"Overlapped Grid Preview (Frame {preview_frame_display})"
+                )
+            
+            # Release grid VideoCaptures
+            for cap_obj in caps_grid:
+                cap_obj.release()
+        else:
+            st.info("No videos selected in the 'Arrange video sequence' options to form a grid.")
+
     else:
         st.warning("Could not read frame.")
     
     cap.release()
-    try: os.unlink(tfile.name)
-    except: pass
 
     st.markdown("---")
 
@@ -284,13 +373,11 @@ if uploaded_files:
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
                 for i, uploaded_file in enumerate(uploaded_files):
                     status_text.text(f"Zipping {uploaded_file.name}...")
-                    uploaded_file.seek(0)
-                    t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1])
-                    t_in.write(uploaded_file.read())
-                    t_in.flush()
-                    t_in.close()
+                    
+                    # Use the cached temp path!
+                    t_in_name = st.session_state.temp_video_paths[uploaded_file.name]
 
-                    vcap = cv2.VideoCapture(t_in.name)
+                    vcap = cv2.VideoCapture(t_in_name)
                     # FAST SEEK
                     vcap.set(cv2.CAP_PROP_POS_FRAMES, actual_start)
                     base_name = os.path.splitext(uploaded_file.name)[0]
@@ -330,8 +417,6 @@ if uploaded_files:
                     if export_format == "MP4": writer.release()
                     else: writer.close()
                         
-                    try: os.unlink(t_in.name)
-                    except: pass
                     zipf.write(t_out_name, arcname=out_name)
                     try: os.unlink(t_out_name)
                     except: pass
@@ -351,18 +436,12 @@ if uploaded_files:
                 st.error("Please select at least one video in the Grid Options.")
             else:
                 with st.spinner("Stitching videos into single grid GIF..."):
-                    temp_paths = []
                     caps = []
                     
                     for fname in ordered_files:
-                        uf = file_map[fname]
-                        uf.seek(0)
-                        t_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uf.name)[1])
-                        t_in.write(uf.read())
-                        t_in.close()
-                        temp_paths.append(t_in.name)
-                        
-                        cap_obj = cv2.VideoCapture(t_in.name)
+                        # Use cached temp paths (optimized!)
+                        path = st.session_state.temp_video_paths[fname]
+                        cap_obj = cv2.VideoCapture(path)
                         cap_obj.set(cv2.CAP_PROP_POS_FRAMES, actual_start)
                         caps.append(cap_obj)
 
@@ -406,9 +485,6 @@ if uploaded_files:
 
                     grid_writer.close()
                     for cap_obj in caps: cap_obj.release()
-                    for p in temp_paths:
-                        try: os.unlink(p)
-                        except: pass
 
                     with open(t_grid_out.name, "rb") as f:
                         st.session_state['merged_grid_gif'] = f.read()
