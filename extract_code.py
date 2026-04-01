@@ -153,18 +153,52 @@ if uploaded_files:
     
     st.sidebar.info(f"Duration: {actual_end - actual_start + 1} frames")
 
-    # --- 5. Split-Pane Spatial Cropping ---
+    # --- 5. Split-Pane Spatial Cropping & Presets ---
     st.sidebar.subheader("3. Split-Pane Crop")
     
+    # Initialize crop variables if they don't exist yet
+    if "crop_y0" not in st.session_state:
+        st.session_state.crop_y0 = 0.33
+        st.session_state.crop_y1 = 0.49
+        st.session_state.crop_lx0 = 0.07
+        st.session_state.crop_lx1 = 0.42
+        st.session_state.crop_rx0 = 0.52
+        st.session_state.crop_rx1 = 0.88
+        st.session_state.preset_selector = "VEVO 2100"
+
+    # Callback to apply presets automatically
+    def apply_preset():
+        preset = st.session_state.preset_selector
+        if preset == "VEVO 2100":
+            st.session_state.crop_y0 = 0.33
+            st.session_state.crop_y1 = 0.49
+            st.session_state.crop_lx0 = 0.07
+            st.session_state.crop_lx1 = 0.42
+            st.session_state.crop_rx0 = 0.52
+            st.session_state.crop_rx1 = 0.88
+        elif preset == "VEVO F2":
+            st.session_state.crop_y0 = 0.32
+            st.session_state.crop_y1 = 0.45
+            st.session_state.crop_lx0 = 0.14
+            st.session_state.crop_lx1 = 0.53
+            st.session_state.crop_rx0 = 0.53
+            st.session_state.crop_rx1 = 0.88
+
+    st.sidebar.radio(
+        "Imaging System Preset",
+        ["VEVO 2100", "VEVO F2", "Custom"],
+        key="preset_selector",
+        on_change=apply_preset
+    )
+
     # Helper function to sync slider and text box for crop values
-    def create_synced_crop(label, key_base, default_val):
-        if key_base not in st.session_state:
-            st.session_state[key_base] = default_val
-            
+    def create_synced_crop(label, key_base):
         def update_slider():
             st.session_state[key_base] = st.session_state[f"{key_base}_slider"]
+            st.session_state.preset_selector = "Custom" # Auto-switch to Custom if manually moved
         def update_num():
             st.session_state[key_base] = st.session_state[f"{key_base}_num"]
+            st.session_state.preset_selector = "Custom" # Auto-switch to Custom if manually typed
             
         st.number_input(label, min_value=0.0, max_value=1.0, value=st.session_state[key_base], step=0.01, format="%.2f", key=f"{key_base}_num", on_change=update_num)
         st.slider(label, min_value=0.0, max_value=1.0, value=st.session_state[key_base], step=0.01, key=f"{key_base}_slider", on_change=update_slider, label_visibility="collapsed")
@@ -172,18 +206,18 @@ if uploaded_files:
     
     st.sidebar.markdown("**Global Height**")
     c1, c2 = st.sidebar.columns(2)
-    with c1: y0 = create_synced_crop("Top (%)", "crop_y0", 0.33)
-    with c2: y1 = create_synced_crop("Bottom (%)", "crop_y1", 0.49)
+    with c1: y0 = create_synced_crop("Top (%)", "crop_y0")
+    with c2: y1 = create_synced_crop("Bottom (%)", "crop_y1")
 
     st.sidebar.markdown("**Left Image (B-Mode)**")
     c3, c4 = st.sidebar.columns(2)
-    with c3: lx0 = create_synced_crop("L-Start (%)", "crop_lx0", 0.07)
-    with c4: lx1 = create_synced_crop("L-End (%)", "crop_lx1", 0.42)
+    with c3: lx0 = create_synced_crop("L-Start (%)", "crop_lx0")
+    with c4: lx1 = create_synced_crop("L-End (%)", "crop_lx1")
 
     st.sidebar.markdown("**Right Image (NLC)**")
     c5, c6 = st.sidebar.columns(2)
-    with c5: rx0 = create_synced_crop("R-Start (%)", "crop_rx0", 0.52)
-    with c6: rx1 = create_synced_crop("R-End (%)", "crop_rx1", 0.88)
+    with c5: rx0 = create_synced_crop("R-Start (%)", "crop_rx0")
+    with c6: rx1 = create_synced_crop("R-End (%)", "crop_rx1")
 
     y_start = int(clamp(y0, 0, 1) * H)
     y_end   = int(clamp(y1, 0, 1) * H)
@@ -355,7 +389,7 @@ if uploaded_files:
                     caption=f"Overlapped Grid Preview (Frame {preview_frame_display})"
                 )
                 
-                # --- NEW: Grid Frame Download Button ---
+                # --- Grid Frame Download Button ---
                 is_success_grid, buffer_grid = cv2.imencode(".png", full_grid_frame)
                 if is_success_grid:
                     st.download_button(
