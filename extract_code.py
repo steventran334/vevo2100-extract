@@ -166,23 +166,23 @@ if uploaded_files:
         st.session_state.crop_rx1 = 0.88
         st.session_state.preset_selector = "VEVO 2100"
 
-    # Callback to apply presets automatically
+    # Callback to apply presets automatically and forcefully update widget keys
     def apply_preset():
         preset = st.session_state.preset_selector
         if preset == "VEVO 2100":
-            st.session_state.crop_y0 = 0.33
-            st.session_state.crop_y1 = 0.49
-            st.session_state.crop_lx0 = 0.07
-            st.session_state.crop_lx1 = 0.42
-            st.session_state.crop_rx0 = 0.52
-            st.session_state.crop_rx1 = 0.88
+            vals = {"crop_y0": 0.33, "crop_y1": 0.49, "crop_lx0": 0.07, "crop_lx1": 0.42, "crop_rx0": 0.52, "crop_rx1": 0.88}
         elif preset == "VEVO F2":
-            st.session_state.crop_y0 = 0.32
-            st.session_state.crop_y1 = 0.45
-            st.session_state.crop_lx0 = 0.14
-            st.session_state.crop_lx1 = 0.53
-            st.session_state.crop_rx0 = 0.53
-            st.session_state.crop_rx1 = 0.88
+            vals = {"crop_y0": 0.33, "crop_y1": 0.44, "crop_lx0": 0.15, "crop_lx1": 0.52, "crop_rx0": 0.53, "crop_rx1": 0.88}
+        else:
+            return
+
+        for k, v in vals.items():
+            st.session_state[k] = v
+            # Explicitly update the UI widget states so sliders jump to the correct positions
+            if f"{k}_num" in st.session_state:
+                st.session_state[f"{k}_num"] = v
+            if f"{k}_slider" in st.session_state:
+                st.session_state[f"{k}_slider"] = v
 
     st.sidebar.radio(
         "Imaging System Preset",
@@ -193,15 +193,22 @@ if uploaded_files:
 
     # Helper function to sync slider and text box for crop values
     def create_synced_crop(label, key_base):
+        # Fallback initializer to ensure widgets match base state
+        if f"{key_base}_num" not in st.session_state:
+            st.session_state[f"{key_base}_num"] = st.session_state[key_base]
+            st.session_state[f"{key_base}_slider"] = st.session_state[key_base]
+
         def update_slider():
             st.session_state[key_base] = st.session_state[f"{key_base}_slider"]
-            st.session_state.preset_selector = "Custom" # Auto-switch to Custom if manually moved
+            st.session_state[f"{key_base}_num"] = st.session_state[f"{key_base}_slider"]
+            st.session_state.preset_selector = "Custom" 
         def update_num():
             st.session_state[key_base] = st.session_state[f"{key_base}_num"]
-            st.session_state.preset_selector = "Custom" # Auto-switch to Custom if manually typed
+            st.session_state[f"{key_base}_slider"] = st.session_state[f"{key_base}_num"]
+            st.session_state.preset_selector = "Custom" 
             
-        st.number_input(label, min_value=0.0, max_value=1.0, value=st.session_state[key_base], step=0.01, format="%.2f", key=f"{key_base}_num", on_change=update_num)
-        st.slider(label, min_value=0.0, max_value=1.0, value=st.session_state[key_base], step=0.01, key=f"{key_base}_slider", on_change=update_slider, label_visibility="collapsed")
+        st.number_input(label, min_value=0.0, max_value=1.0, step=0.01, format="%.2f", key=f"{key_base}_num", on_change=update_num)
+        st.slider(label, min_value=0.0, max_value=1.0, step=0.01, key=f"{key_base}_slider", on_change=update_slider, label_visibility="collapsed")
         return st.session_state[key_base]
     
     st.sidebar.markdown("**Global Height**")
@@ -237,7 +244,8 @@ if uploaded_files:
 
     # --- 6. Export Format Selection & Grid Ordering ---
     st.sidebar.subheader("4. Export Options")
-    export_format = st.sidebar.radio("Choose format for individual ZIP export:", ["MP4", "GIF"])
+    # INDEX=1 sets GIF as the default selected option
+    export_format = st.sidebar.radio("Choose format for individual ZIP export:", ["MP4", "GIF"], index=1)
     
     st.sidebar.markdown("**Grid & Ordering (For Merged Export)**")
     ordered_files = st.sidebar.multiselect(
