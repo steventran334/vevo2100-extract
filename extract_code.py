@@ -31,6 +31,21 @@ uploaded_files = st.file_uploader(
 def clamp(val, lo, hi):
     return max(lo, min(hi, val))
 
+def draw_frame_label(img, frame_num):
+    """Burn 'Frame N' into the bottom-left corner. Returns a labeled copy."""
+    labeled = img.copy()
+    h, w = labeled.shape[:2]
+    text = f"Frame {frame_num}"
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = max(0.45, h / 200.0)
+    thickness = max(1, int(round(font_scale * 2)))
+    pad = int(round(10 * font_scale)) + 4
+    org = (pad, h - pad)  # putText anchors on the text baseline
+    # Black outline first, then white fill — keeps it legible over dark B-mode or bright NLC
+    cv2.putText(labeled, text, org, font, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    cv2.putText(labeled, text, org, font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+    return labeled
+
 if uploaded_files:
     
     # --- 0. Optimize: Cache Temp Files in Session State ---
@@ -246,6 +261,12 @@ if uploaded_files:
     st.sidebar.subheader("4. Export Options")
     # INDEX=1 sets GIF as the default selected option
     export_format = st.sidebar.radio("Choose format for individual ZIP export:", ["MP4", "GIF"], index=1)
+
+    burn_frame_label = st.sidebar.checkbox(
+        "Burn frame number into downloaded frames",
+        value=False,
+        help="Adds 'Frame N' to the bottom-left of the PNG when you download a single frame or the grid frame."
+    )
     
     st.sidebar.markdown("**Grid & Ordering (For Merged Export)**")
     ordered_files = st.sidebar.multiselect(
@@ -341,6 +362,8 @@ if uploaded_files:
             
             if crop_left_clean.shape[0] > 0 and crop_right_clean.shape[0] > 0:
                 stitched_clean = cv2.hconcat([crop_left_clean, crop_right_clean])
+                if burn_frame_label:
+                    stitched_clean = draw_frame_label(stitched_clean, preview_frame_display)
                 is_success, buffer = cv2.imencode(".png", stitched_clean)
                 
                 if is_success:
@@ -398,7 +421,10 @@ if uploaded_files:
                 )
                 
                 # --- Grid Frame Download Button ---
-                is_success_grid, buffer_grid = cv2.imencode(".png", full_grid_frame)
+                is_success_grid, buffer_grid = cv2.imencode(
+                    ".png",
+                    draw_frame_label(full_grid_frame, preview_frame_display) if burn_frame_label else full_grid_frame
+                )
                 if is_success_grid:
                     st.download_button(
                         label="📸 Download Grid Frame",
