@@ -31,7 +31,7 @@ uploaded_files = st.file_uploader(
 def clamp(val, lo, hi):
     return max(lo, min(hi, val))
 
-def draw_frame_label(img, frame_num, font_scale=0.8):
+def draw_frame_label(img, frame_num, font_scale=0.6):
     """Burn 'Frame N' into the bottom-left corner. Returns a labeled copy.
     font_scale sets the text size independent of image height; the label
     stays pinned to the bottom-left because org uses the frame's own height."""
