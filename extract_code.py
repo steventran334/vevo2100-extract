@@ -263,9 +263,9 @@ if uploaded_files:
     export_format = st.sidebar.radio("Choose format for individual ZIP export:", ["MP4", "GIF"], index=1)
 
     burn_frame_label = st.sidebar.checkbox(
-        "Burn frame number into downloaded frames",
+        "Burn frame number into exports",
         value=False,
-        help="Adds 'Frame N' to the bottom-left of the PNG when you download a single frame or the grid frame."
+        help="Adds 'Frame N' to the bottom-left of single PNGs, the ZIP video/GIF frames, and the merged grid GIF."
     )
     
     st.sidebar.markdown("**Grid & Ordering (For Merged Export)**")
@@ -482,7 +482,7 @@ if uploaded_files:
                     else:
                         writer = imageio.get_writer(t_out_name, mode='I', fps=user_fps, loop=0)
                     
-                    for _ in range(actual_start, actual_end + 1):
+                    for offset, src_idx in enumerate(range(actual_start, actual_end + 1)):
                         ok, frame = vcap.read()
                         if not ok: break
                         
@@ -492,6 +492,8 @@ if uploaded_files:
                             
                             if crop_left.shape[0] > 0 and crop_right.shape[0] > 0:
                                 stitched_frame = cv2.hconcat([crop_left, crop_right])
+                                if burn_frame_label:
+                                    stitched_frame = draw_frame_label(stitched_frame, src_idx + 1)
                                 
                                 if export_format == "MP4":
                                     writer.write(stitched_frame)
@@ -564,6 +566,9 @@ if uploaded_files:
                             row_images.append(cv2.hconcat(cols_in_row))
                         
                         full_grid_frame = cv2.vconcat(row_images)
+                        # One label burned onto the whole stacked grid (after vconcat)
+                        if burn_frame_label:
+                            full_grid_frame = draw_frame_label(full_grid_frame, f_idx + 1)
                         rgb_grid_frame = cv2.cvtColor(full_grid_frame, cv2.COLOR_BGR2RGB)
                         grid_writer.append_data(rgb_grid_frame)
                         
