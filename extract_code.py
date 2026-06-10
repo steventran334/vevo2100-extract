@@ -31,17 +31,17 @@ uploaded_files = st.file_uploader(
 def clamp(val, lo, hi):
     return max(lo, min(hi, val))
 
-def draw_frame_label(img, frame_num):
-    """Burn 'Frame N' into the bottom-left corner. Returns a labeled copy."""
+def draw_frame_label(img, frame_num, font_scale=0.8):
+    """Burn 'Frame N' into the bottom-left corner. Returns a labeled copy.
+    font_scale sets the text size independent of image height; the label
+    stays pinned to the bottom-left because org uses the frame's own height."""
     labeled = img.copy()
     h, w = labeled.shape[:2]
     text = f"Frame {frame_num}"
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = max(0.45, h / 200.0)
     thickness = max(1, int(round(font_scale * 2)))
     pad = int(round(10 * font_scale)) + 4
-    org = (pad, h - pad)  # putText anchors on the text baseline
-    # Black outline first, then white fill — keeps it legible over dark B-mode or bright NLC
+    org = (pad, h - pad)  # baseline pinned to bottom-left of THIS frame
     cv2.putText(labeled, text, org, font, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
     cv2.putText(labeled, text, org, font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
     return labeled
